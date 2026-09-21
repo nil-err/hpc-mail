@@ -7,10 +7,13 @@ import {
   feishuSettingSchema,
   listMessagesQuerySchema,
   loginRequestSchema,
+  pushdeerSettingSchema,
   registerRequestSchema,
   sendMailRequestSchema,
   SETTING_SCHEMAS,
+  updateNotifyPrefsRequestSchema,
   updateSettingsRequestSchema,
+  userNotifyPrefsSchema,
   usernameSchema,
 } from '../src/index.js';
 
@@ -148,6 +151,41 @@ describe('settings', () => {
   });
   it('updateSettings 空对象被拒', () => {
     expect(updateSettingsRequestSchema.safeParse({}).success).toBe(false);
+  });
+});
+
+describe('notifyPrefs schemas', () => {
+  it('pushdeerSettingSchema 验证合法与默认值', () => {
+    const valid = pushdeerSettingSchema.parse({ enabled: true, pushkey: 'PDU123' });
+    expect(valid.enabled).toBe(true);
+    expect(valid.pushkey).toBe('PDU123');
+    expect(valid.endpoint).toBe('');
+
+    const withEndpoint = pushdeerSettingSchema.parse({
+      enabled: true,
+      endpoint: 'https://pushdeer.example.com',
+      pushkey: 'PDU123',
+    });
+    expect(withEndpoint.endpoint).toBe('https://pushdeer.example.com');
+  });
+
+  it('userNotifyPrefsSchema 兼容缺失 pushdeer 字段的历史数据', () => {
+    const legacy = {
+      feishu: { enabled: false, webhookUrl: '', secret: '', contentLevel: 'summary' },
+      webhook: { enabled: false, url: '', secret: '' },
+      forward: { enabled: false, addresses: [] },
+    };
+    const parsed = userNotifyPrefsSchema.parse(legacy);
+    expect(parsed.pushdeer).toEqual({ enabled: false, endpoint: '', pushkey: '' });
+  });
+
+  it('updateNotifyPrefsRequestSchema 支持单独更新 pushdeer', () => {
+    expect(updateNotifyPrefsRequestSchema.safeParse({}).success).toBe(false);
+    expect(
+      updateNotifyPrefsRequestSchema.safeParse({
+        pushdeer: { enabled: true, pushkey: 'PDU123', endpoint: '' },
+      }).success,
+    ).toBe(true);
   });
 });
 

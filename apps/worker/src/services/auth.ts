@@ -19,6 +19,7 @@ import { avatarUrl } from './avatar.js';
 import { getSystemFromAddress } from './domain.js';
 import { sendFeishuNotification } from './feishu.js';
 import { getUserNotifyPrefs } from './notify-prefs.js';
+import { sendPushDeerNotification } from './pushdeer.js';
 import { getUserEpoch, bumpUserEpoch, createSession, destroySession } from './session.js';
 import { getSettings } from './setting.js';
 
@@ -183,16 +184,33 @@ export async function login(
       (async () => {
         try {
           const prefs = await getUserNotifyPrefs(env, user.id);
-          await sendFeishuNotification(prefs.feishu, {
-            subject: `⚠ 账号 ${user.username} 新 IP 登录`,
-            fromAddress: await getSystemFromAddress(env),
-            fromName: 'HPC Mail',
-            toAddress: user.username,
-            code: '',
-            body: `本次登录 IP：${ip}\n上次登录 IP：${previousIp}\n若非本人操作，请立即修改密码。`,
-          });
+          const systemFrom = await getSystemFromAddress(env);
+          try {
+            await sendFeishuNotification(prefs.feishu, {
+              subject: `⚠ 账号 ${user.username} 新 IP 登录`,
+              fromAddress: systemFrom,
+              fromName: 'HPC Mail',
+              toAddress: user.username,
+              code: '',
+              body: `本次登录 IP：${ip}\n上次登录 IP：${previousIp}\n若非本人操作，请立即修改密码。`,
+            });
+          } catch (e) {
+            console.error('新 IP 登录飞书告警失败:', e);
+          }
+          try {
+            await sendPushDeerNotification(prefs.pushdeer, {
+              subject: `⚠ 账号 ${user.username} 新 IP 登录`,
+              fromAddress: systemFrom,
+              fromName: 'HPC Mail',
+              toAddress: user.username,
+              code: '',
+              body: `本次登录 IP：${ip}\n上次登录 IP：${previousIp}\n若非本人操作，请立即修改密码。`,
+            });
+          } catch (e) {
+            console.error('新 IP 登录 PushDeer 告警失败:', e);
+          }
         } catch (e) {
-          console.error('新 IP 登录告警失败:', e);
+          console.error('新 IP 登录告警异常:', e);
         }
       })(),
     );

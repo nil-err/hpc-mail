@@ -70,7 +70,7 @@ function isBlockedIpv6(parts: number[]): boolean {
   return false;
 }
 
-function isBlockedHost(rawHost: string): boolean {
+export function isBlockedHost(rawHost: string): boolean {
   const host = rawHost.replace(/^\[|\]$/g, '').replace(/\.$/, '').toLowerCase();
   if (host === 'localhost' || host === 'metadata.google.internal') return true;
   if (BLOCKED_SUFFIXES.some((suffix) => host.endsWith(suffix))) return true;

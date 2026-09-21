@@ -36,6 +36,15 @@ export const notifyWebhookSettingSchema = z.object({
   secret: z.string().max(128).default(''),
 });
 
+/** PushDeer 消息推送：支持官方 https://api2.pushdeer.com 及自建实例 */
+export const pushdeerSettingSchema = z.object({
+  enabled: z.boolean(),
+  endpoint: z
+    .union([z.literal(''), z.url().startsWith('http')])
+    .default(''),
+  pushkey: z.string().max(128).default(''),
+});
+
 export const siteSettingSchema = z.object({
   title: z.string().trim().min(1).max(64),
 });

@@ -4,6 +4,7 @@ import { ok, parseBody } from '../lib/http.js';
 import { requireAuth } from '../middleware/auth.js';
 import { getSystemFromAddress } from '../services/domain.js';
 import { sendFeishuNotification } from '../services/feishu.js';
+import { sendPushDeerNotification } from '../services/pushdeer.js';
 import {
   getUserNotifyPrefs,
   maskUserNotifyPrefs,
@@ -44,6 +45,25 @@ app.post('/feishu-test', async (c) => {
       body: '配置有效。今后你认领地址收到的新邮件会把正文推送到此机器人。',
     },
     { force: true, throwOnError: true, test: true },
+  );
+  return ok(c, { ok: true });
+});
+
+/** 用当前保存的个人 PushDeer 配置发一条测试通知 */
+app.post('/pushdeer-test', async (c) => {
+  const user = c.get('user')!;
+  const prefs = await getUserNotifyPrefs(c.env, user.id);
+  await sendPushDeerNotification(
+    prefs.pushdeer,
+    {
+      subject: 'HPC Mail PushDeer 测试',
+      fromAddress: await getSystemFromAddress(c.env),
+      fromName: 'HPC Mail',
+      toAddress: user.username,
+      code: '123456',
+      body: '配置有效。今后你认领地址收到的新邮件会推送到此设备。',
+    },
+    { force: true, throwOnError: true },
   );
   return ok(c, { ok: true });
 });

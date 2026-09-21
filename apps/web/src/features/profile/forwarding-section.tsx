@@ -78,6 +78,12 @@ export function ForwardingSection() {
     onError: (err) => toast({ title: err instanceof ApiError ? err.message : '发送失败', variant: 'error' }),
   });
 
+  const testPushdeer = useMutation({
+    mutationFn: () => notifyPrefsApi.testPushdeer(),
+    onSuccess: () => toast({ title: '测试消息已发送至 PushDeer', variant: 'success' }),
+    onError: (err) => toast({ title: err instanceof ApiError ? err.message : '发送失败', variant: 'error' }),
+  });
+
   if (isLoading || (data !== undefined && draft === null)) {
     return (
       <section className="rounded-lg border border-line bg-surface p-5">
@@ -179,6 +185,51 @@ export function ForwardingSection() {
             onClick={() => testFeishu.mutate()}
           >
             发送测试卡片
+          </Button>
+          <span className="ml-2 text-xs text-ink-tertiary">测试用当前已保存的配置，未保存的改动不生效。</span>
+        </div>
+      </div>
+
+      {/* PushDeer 通知 */}
+      <div className="flex flex-col gap-2.5 border-t border-line pt-4">
+        <ToggleRow
+          label="PushDeer 通知"
+          checked={draft.pushdeer.enabled}
+          onChange={(v) => patch((d) => void (d.pushdeer.enabled = v))}
+        />
+        <label className="flex flex-col gap-1.5">
+          <span className="text-sm text-ink-secondary">PushKey</span>
+          <PasswordInput
+            placeholder={
+              draft.pushdeer.pushkey === SECRET_MASK ? '已配置（留空保持不变）' : '例如 PDU...'
+            }
+            value={draft.pushdeer.pushkey === SECRET_MASK ? '' : draft.pushdeer.pushkey}
+            onChange={(e) => patch((d) => void (d.pushdeer.pushkey = e.target.value))}
+          />
+          <span className="text-xs text-ink-tertiary">
+            PushDeer App 内生成的 Key（支持 iOS、Android、Mac 客户端）。
+          </span>
+        </label>
+        <label className="flex flex-col gap-1.5">
+          <span className="text-sm text-ink-secondary">自定义服务器端点（可选）</span>
+          <Input
+            placeholder="留空默认使用官方服务 (https://api2.pushdeer.com)"
+            value={draft.pushdeer.endpoint}
+            onChange={(e) => patch((d) => void (d.pushdeer.endpoint = e.target.value))}
+          />
+          <span className="text-xs text-ink-tertiary">
+            若使用自建 PushDeer 服务器，请输入完整服务地址（如 https://pushdeer.example.com）。
+          </span>
+        </label>
+        <div>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            loading={testPushdeer.isPending}
+            onClick={() => testPushdeer.mutate()}
+          >
+            发送测试消息
           </Button>
           <span className="ml-2 text-xs text-ink-tertiary">测试用当前已保存的配置，未保存的改动不生效。</span>
         </div>

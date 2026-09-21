@@ -16,6 +16,7 @@ import { extractCodeByAi, extractCodeByRegex } from './code-extract.js';
 import { sendFeishuNotification } from './feishu.js';
 import { resolveNotifyOwnerIds } from './mailbox.js';
 import { getUserNotifyPrefs } from './notify-prefs.js';
+import { sendPushDeerNotification } from './pushdeer.js';
 import { bumpCounter, dayWindow } from './rate-counter.js';
 import { getSettings } from './setting.js';
 import { sendNotifyWebhook } from './webhook-notify.js';
@@ -477,6 +478,18 @@ export async function handleInbound(
           });
         } catch (e) {
           console.error('飞书通知失败:', e);
+        }
+        try {
+          await sendPushDeerNotification(prefs.pushdeer, {
+            subject,
+            fromAddress,
+            fromName,
+            toAddress,
+            code: finalCode,
+            body: text || htmlToText(html),
+          });
+        } catch (e) {
+          console.error('PushDeer 通知失败:', e);
         }
         try {
           await sendNotifyWebhook(prefs.webhook, {

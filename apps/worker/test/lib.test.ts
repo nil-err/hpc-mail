@@ -20,6 +20,11 @@ import {
 import { chunk, D1_ID_BATCH, D1_MAX_BOUND_PARAMS, D1_PAIR_BATCH } from '../src/lib/d1.js';
 import { generateCode, generateTotpSecret, verifyTotp } from '../src/lib/totp.js';
 import { AppError } from '../src/lib/errors.js';
+import {
+  DEFAULT_PUSHDEER_ENDPOINT,
+  sendPushDeerNotification,
+  validatePushDeerEndpoint,
+} from '../src/services/pushdeer.js';
 
 const SECRET = 'unit-test-secret-key-000000000000';
 
@@ -309,5 +314,54 @@ describe('encodeBodyBase64（正文行长）', () => {
     const raw = encodeBodyBase64(body).replace(/\r\n/g, '');
     const bytes = Uint8Array.from(atob(raw), (c) => c.charCodeAt(0));
     expect(new TextDecoder().decode(bytes)).toBe(body);
+  });
+});
+
+describe('PushDeer 通知', () => {
+  it('默认端点为官方 api2.pushdeer.com', () => {
+    expect(validatePushDeerEndpoint('')).toBe(DEFAULT_PUSHDEER_ENDPOINT);
+    expect(validatePushDeerEndpoint(undefined)).toBe(DEFAULT_PUSHDEER_ENDPOINT);
+  });
+
+  it('允许合法的第三方/自建 http(s) 端点', () => {
+    expect(validatePushDeerEndpoint('https://push.my-domain.com/path')).toBe('https://push.my-domain.com');
+  });
+
+  it('阻止非法端点协议与内网地址（防 SSRF）', () => {
+    expect(() => validatePushDeerEndpoint('ftp://example.com')).toThrow(AppError);
+    expect(() => validatePushDeerEndpoint('http://localhost:8080')).toThrow(AppError);
+    expect(() => validatePushDeerEndpoint('http://127.0.0.1')).toThrow(AppError);
+    expect(() => validatePushDeerEndpoint('http://192.168.1.1')).toThrow(AppError);
+    expect(() => validatePushDeerEndpoint('http://10.0.0.1')).toThrow(AppError);
+  });
+
+  it('未启用时不发送，force 时可触发', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ code: 0, content: { result: [] } })),
+    );
+
+    // 未启用且非 force → 不调 fetch
+    await sendPushDeerNotification(
+      { enabled: false, pushkey: 'PDU_TEST', endpoint: '' },
+      { subject: 'test', fromAddress: 'a@b.com', fromName: 'A', toAddress: 'c@d.com', body: 'hi' },
+    );
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    // force → 调用 fetch
+    await sendPushDeerNotification(
+      { enabled: false, pushkey: 'PDU_TEST', endpoint: '' },
+      { subject: 'test', fromAddress: 'a@b.com', fromName: 'A', toAddress: 'c@d.com', code: '654321', body: 'hi' },
+      { force: true },
+    );
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    const call = fetchSpy.mock.calls[0]!;
+    expect(call[0]).toBe('https://api2.pushdeer.com/message/push');
+    const body = JSON.parse(call[1]?.body as string);
+    expect(body.pushkey).toBe('PDU_TEST');
+    expect(body.text).toContain('654321');
+    expect(body.desp).toContain('a@b.com');
+
+    fetchSpy.mockRestore();
   });
 });

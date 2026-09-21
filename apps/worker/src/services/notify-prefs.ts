@@ -4,6 +4,7 @@ import {
   feishuSettingSchema,
   gmailForwardSettingSchema,
   notifyWebhookSettingSchema,
+  pushdeerSettingSchema,
   type UpdateNotifyPrefsRequest,
   type UserNotifyPrefs,
 } from '@hpc-mail/shared';
@@ -18,6 +19,7 @@ function clone(prefs: UserNotifyPrefs): UserNotifyPrefs {
     feishu: { ...prefs.feishu },
     webhook: { ...prefs.webhook },
     forward: { ...prefs.forward, addresses: [...prefs.forward.addresses] },
+    pushdeer: { ...prefs.pushdeer },
   };
 }
 
@@ -32,6 +34,8 @@ function normalize(raw: unknown): UserNotifyPrefs {
   if (w.success) out.webhook = w.data;
   const fw = gmailForwardSettingSchema.safeParse(r.forward);
   if (fw.success) out.forward = fw.data;
+  const pd = pushdeerSettingSchema.safeParse(r.pushdeer);
+  if (pd.success) out.pushdeer = pd.data;
   return out;
 }
 
@@ -107,6 +111,12 @@ export async function updateUserNotifyPrefs(
     };
   }
   if (patch.forward) next.forward = { ...patch.forward, addresses: [...patch.forward.addresses] };
+  if (patch.pushdeer) {
+    next.pushdeer = {
+      ...patch.pushdeer,
+      pushkey: patch.pushdeer.pushkey === SECRET_MASK ? current.pushdeer.pushkey : patch.pushdeer.pushkey,
+    };
+  }
 
   const db = createDb(env);
   const res = await db
@@ -118,11 +128,12 @@ export async function updateUserNotifyPrefs(
   return next;
 }
 
-/** 回显脱敏：feishu / webhook secret 用 SECRET_MASK（保留 configured 状态） */
+/** 回显脱敏：feishu / webhook secret 与 pushdeer pushkey 用 SECRET_MASK（保留 configured 状态） */
 export function maskUserNotifyPrefs(prefs: UserNotifyPrefs): UserNotifyPrefs {
   return {
     ...prefs,
     feishu: { ...prefs.feishu, secret: prefs.feishu.secret ? SECRET_MASK : '' },
     webhook: { ...prefs.webhook, secret: prefs.webhook.secret ? SECRET_MASK : '' },
+    pushdeer: { ...prefs.pushdeer, pushkey: prefs.pushdeer.pushkey ? SECRET_MASK : '' },
   };
 }

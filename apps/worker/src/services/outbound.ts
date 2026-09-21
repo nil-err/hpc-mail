@@ -22,6 +22,7 @@ import { getRoutableDomains } from './domain.js';
 import { sendFeishuNotification } from './feishu.js';
 import { resolveNotifyOwnerIds } from './mailbox.js';
 import { getUserNotifyPrefs } from './notify-prefs.js';
+import { sendPushDeerNotification } from './pushdeer.js';
 import { bumpCounter, dayWindow } from './rate-counter.js';
 import { getSettings } from './setting.js';
 import { sendNotifyWebhook } from './webhook-notify.js';
@@ -712,6 +713,18 @@ export async function sendMail(
               });
             } catch (e) {
               console.error('站内互投飞书通知失败:', e);
+            }
+            try {
+              await sendPushDeerNotification(prefs.pushdeer, {
+                subject: req.subject,
+                fromAddress: from.address,
+                fromName: from.displayName,
+                toAddress: target,
+                code,
+                body: text || html,
+              });
+            } catch (e) {
+              console.error('站内互投 PushDeer 通知失败:', e);
             }
             try {
               await sendNotifyWebhook(prefs.webhook, {

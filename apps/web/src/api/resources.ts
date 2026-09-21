@@ -79,6 +79,7 @@ export const notifyPrefsApi = {
   update: (body: UpdateNotifyPrefsRequest) =>
     api.put<UserNotifyPrefs, UpdateNotifyPrefsRequest>('/me/notify-prefs', body),
   testFeishu: () => api.post<{ ok: boolean }>('/me/notify-prefs/feishu-test'),
+  testPushdeer: () => api.post<{ ok: boolean }>('/me/notify-prefs/pushdeer-test'),
 };
 
 // ---- 邮箱 ----
