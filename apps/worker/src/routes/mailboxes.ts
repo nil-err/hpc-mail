@@ -10,6 +10,7 @@ import {
   releaseMailbox,
   updateMailbox,
 } from '../services/mailbox.js';
+import { listSharedMailboxes } from '../services/mailbox-share.js';
 import type { AppContext } from '../types.js';
 
 const app = new Hono<AppContext>();
@@ -21,6 +22,12 @@ app.get('/', async (c) => {
   const all = c.req.query('all') === '1' && user.role === 'admin';
   const list = await listMailboxes(c.env, all ? { all: true } : { userId: user.id });
   return ok(c, list);
+});
+
+/** 分享给我的管理员邮箱（只读，不能当发件身份） */
+app.get('/shared', async (c) => {
+  const user = c.get('user')!;
+  return ok(c, await listSharedMailboxes(c.env, user.id));
 });
 
 app.get('/availability', async (c) => {

@@ -85,6 +85,13 @@
       "when": 1788302233140,
       "tag": "0011_fancy_vargas",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1790183931736,
+      "tag": "0012_smart_prima",
+      "breakpoints": true
     }
   ]
 }

@@ -184,6 +184,24 @@ export const draftAttachments = sqliteTable(
   ],
 );
 
+/**
+ * 共享邮箱：管理员把自己已认领的地址只读分享给普通用户。
+ * 不改变 mailboxes.user_id（唯一认领人），也不参与通知归属。
+ */
+export const mailboxShares = sqliteTable(
+  'mailbox_shares',
+  {
+    mailboxId: integer('mailbox_id').notNull(),
+    userId: integer('user_id').notNull(),
+    grantedBy: integer('granted_by').notNull(),
+    createdAt: createdAtColumn(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.mailboxId, t.userId] }),
+    index('idx_mailbox_shares_user').on(t.userId),
+  ],
+);
+
 /** 星标：每用户对某封邮件的标记（messages 不含 user_id，星标独立表关联） */
 export const stars = sqliteTable(
   'stars',

@@ -20,6 +20,9 @@ import type {
   LoginResponse,
   Mailbox,
   MailboxAvailability,
+  MailboxShareGrant,
+  ReplaceMailboxSharesRequest,
+  SharedMailboxView,
   MessageDetail,
   MessageSummary,
   MultipartCompleteResult,
@@ -94,6 +97,7 @@ export const mailboxApi = {
     }),
   availability: (localPart: string, domain: string) =>
     api.get<MailboxAvailability>('/mailboxes/availability', { query: { localPart, domain } }),
+  shared: () => api.get<SharedMailboxView[]>('/mailboxes/shared'),
 };
 
 // ---- 邮件 ----
@@ -126,7 +130,7 @@ export const messageApi = {
       { query: { scope: view?.scope, userId: view?.userId } },
     ),
   remove: (ids: number[], scope?: 'mine' | 'unclaimed') =>
-    api.post<void, { ids: number[] }>('/messages/delete', { ids }, { query: { scope } }),
+    api.post<{ deleted: number }, { ids: number[] }>('/messages/delete', { ids }, { query: { scope } }),
   restore: (ids: number[], scope?: 'mine' | 'unclaimed') =>
     api.post<void, { ids: number[] }>('/messages/restore', { ids }, { query: { scope } }),
   purge: (ids: number[], scope?: 'mine' | 'unclaimed') =>
@@ -213,4 +217,9 @@ export const adminApi = {
   revokeInvite: (id: number) => api.delete<void>(`/admin/invites/${id}`),
   auditLogs: (cursor?: string, limit = 30) =>
     api.get<Page<AdminAuditLogEntry>>('/admin/audit-logs', { query: { cursor, limit } }),
+  listMailboxShares: () => api.get<MailboxShareGrant[]>('/admin/mailbox-shares'),
+  replaceMailboxShares: (body: ReplaceMailboxSharesRequest) =>
+    api.put<MailboxShareGrant, ReplaceMailboxSharesRequest>('/admin/mailbox-shares', body),
+  revokeMailboxShare: (mailboxId: number, userId: number) =>
+    api.delete<{ success: boolean }>(`/admin/mailbox-shares/${mailboxId}/grantees/${userId}`),
 };

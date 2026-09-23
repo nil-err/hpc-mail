@@ -141,6 +141,13 @@ export async function updateUser(
     throw error;
   }
   if (bumpEpoch) await bumpUserEpoch(env, id);
+  // 管理员降为普通用户后，名下邮箱不再是「管理员邮箱」，已有分享立即失效
+  if (req.role === 'user' && target.role === 'admin') {
+    await env.db
+      .prepare('DELETE FROM mailbox_shares WHERE mailbox_id IN (SELECT id FROM mailboxes WHERE user_id = ?)')
+      .bind(id)
+      .run();
+  }
 
   const count = await db
     .select({ apiKeyCount: apiKeyCountSql })
@@ -151,7 +158,7 @@ export async function updateUser(
 }
 
 /**
- * 删除用户：级联清理 mailboxes / api_keys / stars / 头像 R2 对象，避免僵尸数据。
+ * 删除用户：级联清理 mailboxes / mailbox_shares / api_keys / stars / 头像 R2 对象，避免僵尸数据。
  * messages 不动（仍按 address 归属，随地址回未认领态）。
  */
 export async function deleteUser(env: Env, actingUserId: number, id: number): Promise<void> {
@@ -168,6 +175,10 @@ export async function deleteUser(env: Env, actingUserId: number, id: number): Pr
   // D1 batch 作为一个事务提交：最后管理员触发器若拒绝 DELETE，前面的关联清理也会整体回滚。
   try {
     await env.db.batch([
+      env.db.prepare('DELETE FROM mailbox_shares WHERE user_id = ?').bind(id),
+      env.db
+        .prepare('DELETE FROM mailbox_shares WHERE mailbox_id IN (SELECT id FROM mailboxes WHERE user_id = ?)')
+        .bind(id),
       env.db.prepare('DELETE FROM mailboxes WHERE user_id = ?').bind(id),
       env.db.prepare('DELETE FROM api_keys WHERE user_id = ?').bind(id),
       env.db.prepare('DELETE FROM stars WHERE user_id = ?').bind(id),

@@ -3,6 +3,7 @@ import { onError, requestId } from './middleware/error.js';
 import adminApiKeys from './routes/admin/api-keys.js';
 import adminAudit from './routes/admin/audit.js';
 import adminInvites from './routes/admin/invites.js';
+import adminMailboxShares from './routes/admin/mailbox-shares.js';
 import adminSettings from './routes/admin/settings.js';
 import adminUsers from './routes/admin/users.js';
 import apiKeys from './routes/api-keys.js';
@@ -35,6 +36,7 @@ export function createApp() {
   api.route('/uploads', uploads);
   api.route('/api-keys', apiKeys);
   api.route('/admin/users', adminUsers);
+  api.route('/admin/mailbox-shares', adminMailboxShares);
   api.route('/admin/settings', adminSettings);
   api.route('/admin/invites', adminInvites);
   api.route('/admin/api-keys', adminApiKeys);

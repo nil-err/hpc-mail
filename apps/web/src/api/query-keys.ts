@@ -12,6 +12,7 @@ export const queryKeys = {
     list: (scope: 'mine' | 'all') => ['mailboxes', 'list', scope] as const,
     availability: (localPart: string, domain: string) =>
       ['mailboxes', 'availability', domain, localPart] as const,
+    shared: ['mailboxes', 'shared'] as const,
   },
 
   messages: {
@@ -32,5 +33,6 @@ export const queryKeys = {
     settings: ['admin', 'settings'] as const,
     invites: ['admin', 'invites'] as const,
     domainStatus: (domain: string) => ['admin', 'domain-status', domain] as const,
+    mailboxShares: ['admin', 'mailbox-shares'] as const,
   },
 } as const;

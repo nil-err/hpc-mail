@@ -29,6 +29,7 @@ DROP TABLE IF EXISTS sessions;
 DROP TABLE IF EXISTS stars;
 DROP TABLE IF EXISTS attachments;
 DROP TABLE IF EXISTS messages;
+DROP TABLE IF EXISTS mailbox_shares;
 DROP TABLE IF EXISTS mailboxes;
 DROP TABLE IF EXISTS users;
 -- 迁移 journal（清掉后 migrations apply 会从 0 重放）

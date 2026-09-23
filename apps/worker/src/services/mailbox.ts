@@ -1,7 +1,7 @@
 import type { ClaimMailboxRequest, Mailbox, MailboxAvailability, Role } from '@hpc-mail/shared';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { createDb } from '../db/client.js';
-import { attachments as attachmentsTable, mailboxes, messages, stars, users } from '../db/schema.js';
+import { attachments as attachmentsTable, mailboxShares, mailboxes, messages, stars, users } from '../db/schema.js';
 import { chunk } from '../lib/d1.js';
 import { AppError } from '../lib/errors.js';
 import type { Env } from '../types.js';
@@ -209,6 +209,7 @@ export async function releaseMailbox(
   if (deleteHistory) {
     deletedMessages = await purgeAddressMessages(env, row.address);
   }
+  await db.delete(mailboxShares).where(eq(mailboxShares.mailboxId, row.id));
   await db.delete(mailboxes).where(eq(mailboxes.id, id));
   return { deletedMessages };
 }

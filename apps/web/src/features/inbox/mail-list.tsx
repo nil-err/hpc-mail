@@ -12,6 +12,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/components/ui/toast';
 import type { MessageSummary } from '@hpc-mail/shared';
+import { useSharedMailboxesQuery } from '@/features/mailboxes/use-mailboxes';
 import { mailHref } from './mail-view';
 import { MessageRow } from './message-row';
 import { useMessagesQuery } from './use-messages';
@@ -58,6 +59,11 @@ export function MailList({
   const { data, isLoading, isError, error, fetchNextPage, hasNextPage, isFetchingNextPage, refetch } =
     useMessagesQuery(query);
   const items = data?.pages.flatMap((page) => page.items) ?? [];
+  const { data: sharedMailboxes } = useSharedMailboxesQuery();
+  const sharedAddresses = useMemo(
+    () => new Set((sharedMailboxes ?? []).map((mailbox) => mailbox.address)),
+    [sharedMailboxes],
+  );
 
   const starView =
     query.scope === 'unclaimed' || query.scope === 'user'
@@ -140,8 +146,12 @@ export function MailList({
 
   const batchDelete = useMutation({
     mutationFn: (ids: number[]) => messageApi.remove(ids, mutationScope),
-    onSuccess: (_d, ids) => {
-      toast({ title: `已删除 ${ids.length} 封`, variant: 'success' });
+    onSuccess: (result) => {
+      if (result.deleted === 0) {
+        toast({ title: '这些邮件不能删除', variant: 'error' });
+        return;
+      }
+      toast({ title: `已删除 ${result.deleted} 封`, variant: 'success' });
       clearSelection();
       invalidateMessages();
     },
@@ -309,7 +319,17 @@ export function MailList({
                   size="sm"
                   variant="ghost"
                   disabled={batchPending}
-                  onClick={() => batchDelete.mutate(selectedIds)}
+                  onClick={() => {
+                    const deletable = selectedIds.filter((id) => {
+                      const message = items.find((item) => item.id === id);
+                      return message ? !sharedAddresses.has(message.address) : false;
+                    });
+                    if (deletable.length === 0) {
+                      toast({ title: '共享邮箱里的邮件不能删除', variant: 'error' });
+                      return;
+                    }
+                    batchDelete.mutate(deletable);
+                  }}
                 >
                   <Trash2 className="size-4 text-critical" />
                   删除
@@ -345,6 +365,7 @@ export function MailList({
                 selected={selection.has(message.id)}
                 selectionActive={selectionActive}
                 onToggleSelect={readOnly ? undefined : toggleSelect}
+                shared={sharedAddresses.has(message.address)}
               />
             </div>
           );

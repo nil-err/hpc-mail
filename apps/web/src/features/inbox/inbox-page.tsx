@@ -8,8 +8,9 @@ import { PageHeader } from '@/components/page-header';
 import { Button } from '@/components/ui/button';
 import type { ComboboxOption } from '@/components/ui/combobox';
 import { EmptyState } from '@/components/ui/empty-state';
+import { Skeleton } from '@/components/ui/skeleton';
 import { toast } from '@/components/ui/toast';
-import { useMailboxesQuery } from '@/features/mailboxes/use-mailboxes';
+import { useMailboxesQuery, useSharedMailboxesQuery } from '@/features/mailboxes/use-mailboxes';
 import { useDomains } from '@/lib/use-config';
 import { FilterBar } from './filter-bar';
 import { MailList } from './mail-list';
@@ -20,6 +21,7 @@ export function InboxPage() {
   const { filters, setDomain, setAddress, setUnread, setQuery, reset } = useInboxFilters();
   const { data: visibleDomains } = useDomains();
   const { data: mailboxes } = useMailboxesQuery(false);
+  const { data: sharedMailboxes, isError: sharedError } = useSharedMailboxesQuery();
   const { data: unreadData } = useUnreadCount();
   const queryClient = useQueryClient();
 
@@ -32,19 +34,32 @@ export function InboxPage() {
     onError: () => toast({ title: '操作失败，请重试', variant: 'error' }),
   });
 
-  const addressOptions = useMemo<ComboboxOption[]>(
-    () =>
-      (mailboxes ?? []).map((mailbox) => ({
+  const addressOptions = useMemo<ComboboxOption[]>(() => {
+    const owned = (mailboxes ?? []).map((mailbox) => ({
+      value: mailbox.address,
+      label: mailbox.address,
+      description: mailbox.displayName || undefined,
+    }));
+    const ownedAddresses = new Set(owned.map((option) => option.value));
+    const shared = (sharedMailboxes ?? [])
+      .filter((mailbox) => !ownedAddresses.has(mailbox.address))
+      .map((mailbox) => ({
         value: mailbox.address,
         label: mailbox.address,
-        description: mailbox.displayName || undefined,
-      })),
-    [mailboxes],
-  );
+        description: '共享',
+      }));
+    return [...owned, ...shared];
+  }, [mailboxes, sharedMailboxes]);
+
+  const domains = useMemo(() => {
+    const set = new Set(visibleDomains ?? []);
+    for (const mailbox of sharedMailboxes ?? []) set.add(mailbox.domain);
+    return [...set];
+  }, [visibleDomains, sharedMailboxes]);
 
   const hasActiveFilters = Boolean(filters.domain || filters.address || filters.unread || filters.q);
-  // 尚未认领任何地址：收件箱注定为空，直接引导去认领（mailboxes 已加载且为空）
-  const noMailbox = mailboxes !== undefined && mailboxes.length === 0;
+  const addressesReady = mailboxes !== undefined && (sharedMailboxes !== undefined || sharedError);
+  const noMailbox = addressesReady && mailboxes.length === 0 && (sharedMailboxes?.length ?? 0) === 0;
 
   const query = {
     direction: 'inbound' as const,
@@ -68,7 +83,9 @@ export function InboxPage() {
           )
         }
       />
-      {noMailbox ? (
+      {!addressesReady ? (
+        <Skeleton className="h-40 w-full rounded-lg" />
+      ) : noMailbox ? (
         <div className="rounded-lg border border-line bg-surface">
           <EmptyState
             icon={AtSign}
@@ -85,7 +102,7 @@ export function InboxPage() {
         <div className="flex flex-col gap-4">
           <FilterBar
             filters={filters}
-            domains={visibleDomains ?? []}
+            domains={domains}
             addressOptions={addressOptions}
             onDomainChange={setDomain}
             onAddressChange={setAddress}
@@ -97,7 +114,7 @@ export function InboxPage() {
             hasActiveFilters={hasActiveFilters}
             onClearFilters={reset}
             emptyTitle="还没有邮件"
-            emptyDescription="发送到你已认领地址的邮件会出现在这里。"
+            emptyDescription="发送到你已认领或共享给你的地址的邮件会出现在这里。"
           />
         </div>
       )}

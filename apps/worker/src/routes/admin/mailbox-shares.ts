@@ -1,0 +1,41 @@
+import { replaceMailboxSharesRequestSchema } from '@hpc-mail/shared';
+import { Hono } from 'hono';
+import { clientIp, ok, parseBody, parseId } from '../../lib/http.js';
+import { requireAdmin, requireAuth } from '../../middleware/auth.js';
+import { logAdminAction } from '../../services/audit.js';
+import { listMailboxShares, replaceMailboxShares, revokeMailboxShare } from '../../services/mailbox-share.js';
+import type { AppContext } from '../../types.js';
+
+const app = new Hono<AppContext>();
+app.use('*', requireAuth, requireAdmin);
+
+app.get('/', async (c) => {
+  const acting = c.get('user')!;
+  return ok(c, await listMailboxShares(c.env, acting.id));
+});
+
+app.put('/', async (c) => {
+  const acting = c.get('user')!;
+  const req = await parseBody(c, replaceMailboxSharesRequestSchema);
+  const updated = await replaceMailboxShares(c.env, acting.id, req.mailboxId, req.userIds);
+  await logAdminAction(
+    c.env,
+    acting,
+    'mailbox.share',
+    updated.address,
+    updated.grantees.map((grantee) => grantee.username).join('、') || '清空共享',
+    clientIp(c),
+  );
+  return ok(c, updated);
+});
+
+app.delete('/:mailboxId/grantees/:userId', async (c) => {
+  const acting = c.get('user')!;
+  const mailboxId = parseId(c.req.param('mailboxId'));
+  const userId = parseId(c.req.param('userId'));
+  await revokeMailboxShare(c.env, acting.id, mailboxId, userId);
+  await logAdminAction(c.env, acting, 'mailbox.unshare', `mailbox#${mailboxId}`, `user#${userId}`, clientIp(c));
+  return ok(c, { success: true });
+});
+
+export default app;

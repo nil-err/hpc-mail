@@ -29,6 +29,7 @@ export function MessageRow({
   selected = false,
   selectionActive = false,
   onToggleSelect,
+  shared = false,
 }: {
   message: MessageSummary;
   href: string;
@@ -36,6 +37,8 @@ export function MessageRow({
   selected?: boolean;
   selectionActive?: boolean;
   onToggleSelect?: (id: number, event: MouseEvent) => void;
+  /** 这封信来自共享给当前用户的管理员邮箱 */
+  shared?: boolean;
 }) {
   const outbound = message.direction === 'outbound';
   const unread = !outbound && !message.isRead;
@@ -101,7 +104,12 @@ export function MessageRow({
               </Badge>
             )}
             {!outbound && (
-              <span className="ml-auto hidden max-w-[45%] shrink-0 truncate text-xs text-ink-tertiary sm:inline">
+              <span className="ml-auto hidden max-w-[45%] shrink-0 items-center gap-1.5 truncate text-xs text-ink-tertiary sm:inline-flex">
+                {shared && (
+                  <Badge tone="neutral" className="shrink-0">
+                    共享
+                  </Badge>
+                )}
                 {message.address}
               </span>
             )}

@@ -3,12 +3,14 @@ import { env } from 'cloudflare:test';
 import { and, eq } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createDb } from '../src/db/client.js';
-import { messages, settings as settingsTable, users } from '../src/db/schema.js';
+import { mailboxShares, messages, settings as settingsTable, users } from '../src/db/schema.js';
 import { AppError } from '../src/lib/errors.js';
 import { getDomains, getPublicDomains, getRoutableDomains, getVisibleDomains } from '../src/services/domain.js';
-import { claimMailbox } from '../src/services/mailbox.js';
+import { claimMailbox, listMailboxes, releaseMailbox } from '../src/services/mailbox.js';
+import { listSharedMailboxes, replaceMailboxShares, revokeMailboxShare } from '../src/services/mailbox-share.js';
 import {
   countUnread,
+  deleteMessages,
   getMessageDetail,
   listMessages,
   markAllRead,
@@ -22,6 +24,7 @@ import {
 } from '../src/services/notify-prefs.js';
 import { sendMail } from '../src/services/outbound.js';
 import { updateSettings } from '../src/services/setting.js';
+import { deleteUser, updateUser } from '../src/services/user.js';
 
 async function seedUser(username: string, role: 'admin' | 'user'): Promise<number> {
   const db = createDb(env);
@@ -576,5 +579,228 @@ describe('回复头 replyToMessageId', () => {
       .where(and(eq(messages.direction, 'inbound'), eq(messages.address, 'friend@hpc.email')))
       .get();
     expect(internal?.inReplyTo).toBe('<orig-abc@example.com>');
+  });
+});
+
+describe('共享邮箱', () => {
+  async function setup() {
+    await setDomains();
+    const localPart = `sb${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
+    const address = `${localPart}@inbox.test`;
+    const adminId = await seedUser(`share-admin-${crypto.randomUUID().slice(0, 8)}`, 'admin');
+    const shareeId = await seedUser(`share-user-${crypto.randomUUID().slice(0, 8)}`, 'user');
+    const otherId = await seedUser(`share-other-${crypto.randomUUID().slice(0, 8)}`, 'user');
+    const box = await claimMailbox(env, adminId, 'admin', { localPart, domain: 'inbox.test' });
+    const inboundId = await seedInbound(address, 'shared code', 'code 654321');
+    const db = createDb(env);
+    const [outbound] = await db
+      .insert(messages)
+      .values({
+        direction: 'outbound',
+        address,
+        domain: 'inbox.test',
+        fromAddress: address,
+        recipients: { to: ['pal@example.com'], cc: [], bcc: ['secret@example.com'] },
+        subject: 'sent from shared box',
+        status: 'sent',
+        isRead: true,
+        createdAt: new Date(),
+      })
+      .returning({ id: messages.id });
+    const [trashed] = await db
+      .insert(messages)
+      .values({
+        direction: 'inbound',
+        address,
+        domain: 'inbox.test',
+        fromAddress: 'sender@example.com',
+        subject: 'trashed shared',
+        status: 'received',
+        deletedAt: new Date(),
+        createdAt: new Date(),
+      })
+      .returning({ id: messages.id });
+    return {
+      adminId,
+      shareeId,
+      otherId,
+      box,
+      address,
+      localPart,
+      inboundId,
+      outboundId: outbound!.id,
+      trashedId: trashed!.id,
+    };
+  }
+
+  it('被分享用户能看收件和验证码，看不到已发送、回收站，也不能删或代发', async () => {
+    const { adminId, shareeId, otherId, box, address, localPart, inboundId, outboundId, trashedId } = await setup();
+    await replaceMailboxShares(env, adminId, box.id, [shareeId]);
+
+    const sharee = { userId: shareeId, role: 'user' as const };
+    const inbox = await listMessages(env, sharee, { direction: 'inbound', limit: 20 } as never);
+    expect(inbox.items.map((item) => item.id)).toContain(inboundId);
+    expect(inbox.items.map((item) => item.id)).not.toContain(outboundId);
+    expect(inbox.items.map((item) => item.id)).not.toContain(trashedId);
+    expect(inbox.items.find((item) => item.id === inboundId)?.subject).toBe('shared code');
+
+    const sent = await listMessages(env, sharee, { direction: 'outbound', limit: 20 } as never);
+    expect(sent.items.map((item) => item.id)).not.toContain(outboundId);
+
+    const trash = await listMessages(env, sharee, { trash: true, limit: 20 } as never);
+    expect(trash.items.map((item) => item.id)).not.toContain(trashedId);
+
+    const detail = await getMessageDetail(env, sharee, inboundId);
+    expect(detail.address).toBe(address);
+    expect(detail.verificationCode).toBe('654321');
+    await expect(getMessageDetail(env, sharee, outboundId)).rejects.toMatchObject({ code: 'not_found' });
+    await expect(getMessageDetail(env, sharee, trashedId)).rejects.toMatchObject({ code: 'not_found' });
+    await expect(getMessageDetail(env, { userId: otherId, role: 'user' }, inboundId)).rejects.toMatchObject({
+      code: 'not_found',
+    });
+
+    const asSharee = await listMessages(
+      env,
+      { userId: adminId, role: 'admin', scope: 'user', targetUserId: shareeId },
+      { direction: 'inbound', limit: 20 } as never,
+    );
+    expect(asSharee.items.map((item) => item.id)).not.toContain(inboundId);
+
+    const unclaimed = await listMessages(
+      env,
+      { userId: adminId, role: 'admin', scope: 'unclaimed' },
+      { direction: 'inbound', limit: 50 } as never,
+    );
+    expect(unclaimed.items.map((item) => item.id)).not.toContain(inboundId);
+
+    const adminInbox = await listMessages(
+      env,
+      { userId: adminId, role: 'admin', scope: 'mine' },
+      { direction: 'inbound', limit: 20 } as never,
+    );
+    expect(adminInbox.items.map((item) => item.id)).toContain(inboundId);
+
+    expect(await countUnread(env, shareeId, 'user')).toBeGreaterThanOrEqual(1);
+    expect(await markAllRead(env, sharee)).toBeGreaterThanOrEqual(1);
+    expect(await countUnread(env, adminId, 'admin')).toBe(0);
+
+    expect(await deleteMessages(env, sharee, [inboundId])).toBe(0);
+    const stillThere = await getMessageDetail(env, sharee, inboundId);
+    expect(stillThere.id).toBe(inboundId);
+
+    await expect(starMessages(env, sharee, [inboundId], true)).resolves.toBe(1);
+
+    const owned = await listMailboxes(env, { userId: shareeId });
+    expect(owned.some((item) => item.address === address)).toBe(false);
+    const shared = await listSharedMailboxes(env, shareeId);
+    expect(shared.map((item) => item.address)).toEqual([address]);
+
+    await expect(
+      sendMail(
+        env,
+        { waitUntil: () => {} },
+        sharee,
+        {
+          from: { localPart, domain: 'inbox.test' },
+          to: ['someone@example.com'],
+          cc: [],
+          bcc: [],
+          subject: 'should fail',
+          text: 'no',
+        } as never,
+        [],
+        'https://hpc.email',
+      ),
+    ).rejects.toMatchObject({ code: 'forbidden' });
+  });
+
+  it('只能把自己认领的邮箱共享给启用中的普通用户', async () => {
+    await setDomains();
+    const adminId = await seedUser('share-rule-admin', 'admin');
+    const otherAdmin = await seedUser('share-rule-admin2', 'admin');
+    const userId = await seedUser('share-rule-user', 'user');
+    const userBox = await claimMailbox(env, userId, 'user', { localPart: 'usermbox', domain: 'inbox.test' });
+    const adminBox = await claimMailbox(env, adminId, 'admin', { localPart: 'adminbox', domain: 'inbox.test' });
+
+    await expect(replaceMailboxShares(env, adminId, userBox.id, [userId])).rejects.toMatchObject({
+      code: 'forbidden',
+    });
+    await expect(replaceMailboxShares(env, otherAdmin, adminBox.id, [userId])).rejects.toMatchObject({
+      code: 'forbidden',
+    });
+    await expect(replaceMailboxShares(env, adminId, adminBox.id, [adminId])).rejects.toMatchObject({
+      code: 'validation_failed',
+    });
+    await expect(replaceMailboxShares(env, adminId, adminBox.id, [otherAdmin])).rejects.toMatchObject({
+      code: 'validation_failed',
+    });
+
+    const db = createDb(env);
+    await db.update(users).set({ status: 'disabled' }).where(eq(users.id, userId));
+    await expect(replaceMailboxShares(env, adminId, adminBox.id, [userId])).rejects.toMatchObject({
+      code: 'validation_failed',
+    });
+    await db.update(users).set({ status: 'active' }).where(eq(users.id, userId));
+
+    const granted = await replaceMailboxShares(env, adminId, adminBox.id, [userId, userId]);
+    expect(granted.grantees.map((grantee) => grantee.userId)).toEqual([userId]);
+    const cleared = await replaceMailboxShares(env, adminId, adminBox.id, []);
+    expect(cleared.grantees).toEqual([]);
+  });
+
+  it('释放、降级、禁用主人和删除被分享人都会让共享失效', async () => {
+    const { adminId, shareeId, box, address, localPart, inboundId } = await setup();
+    const keeper = await seedUser('share-keeper-admin', 'admin');
+    await replaceMailboxShares(env, adminId, box.id, [shareeId]);
+
+    const db = createDb(env);
+    await db.update(users).set({ status: 'disabled' }).where(eq(users.id, adminId));
+    expect(await listSharedMailboxes(env, shareeId)).toEqual([]);
+    const hidden = await listMessages(
+      env,
+      { userId: shareeId, role: 'user' },
+      { direction: 'inbound', address, limit: 10 } as never,
+    );
+    expect(hidden.items).toEqual([]);
+    await db.update(users).set({ status: 'active' }).where(eq(users.id, adminId));
+    expect((await listSharedMailboxes(env, shareeId)).map((item) => item.address)).toEqual([address]);
+
+    await updateUser(env, keeper, adminId, { role: 'user' });
+    expect(await listSharedMailboxes(env, shareeId)).toEqual([]);
+    await updateUser(env, keeper, adminId, { role: 'admin' });
+    expect(await listSharedMailboxes(env, shareeId)).toEqual([]);
+
+    await replaceMailboxShares(env, adminId, box.id, [shareeId]);
+    await revokeMailboxShare(env, adminId, box.id, shareeId);
+    expect(await listSharedMailboxes(env, shareeId)).toEqual([]);
+    await expect(revokeMailboxShare(env, adminId, box.id, shareeId)).rejects.toMatchObject({ code: 'not_found' });
+
+    await replaceMailboxShares(env, adminId, box.id, [shareeId]);
+    await releaseMailbox(env, adminId, box.id, true, false);
+    expect(await listSharedMailboxes(env, shareeId)).toEqual([]);
+    const afterRelease = await listMessages(
+      env,
+      { userId: shareeId, role: 'user' },
+      { direction: 'inbound', address, limit: 10 } as never,
+    );
+    expect(afterRelease.items).toEqual([]);
+    const sharesLeft = await db
+      .select()
+      .from(mailboxShares)
+      .where(eq(mailboxShares.mailboxId, box.id))
+      .all();
+    expect(sharesLeft).toEqual([]);
+
+    const boxAgain = await claimMailbox(env, adminId, 'admin', { localPart, domain: 'inbox.test' });
+    expect(boxAgain.id).not.toBe(box.id);
+    expect(await listSharedMailboxes(env, shareeId)).toEqual([]);
+    await expect(getMessageDetail(env, { userId: shareeId, role: 'user' }, inboundId)).rejects.toMatchObject({
+      code: 'not_found',
+    });
+
+    await replaceMailboxShares(env, adminId, boxAgain.id, [shareeId]);
+    await deleteUser(env, adminId, shareeId);
+    const dangling = await db.select().from(mailboxShares).where(eq(mailboxShares.userId, shareeId)).all();
+    expect(dangling).toEqual([]);
   });
 });

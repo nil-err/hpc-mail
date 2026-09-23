@@ -13,14 +13,15 @@ description: 通过 HTTP API 操作 HPC Mail（https://hpc.email）多域名邮�
 
 > 本系统开源可自部署，本文档随每个部署实例分发。若你是从其他域名获取到本文件，`$BASE` 就是那个域名——把下文示例中的 `https://hpc.email` 全部替换为它即可，API 完全一致。
 
-理解这套 API 的关键在于：**邮箱地址与登录身份是分离的**。你用用户名密码登录得到一个访问令牌，令牌代表「你这个账户」；而收发邮件用的是一个个「邮箱地址」（如 `bot@hpc.email`），需要先认领才能归你专用。搞清这一点，后面的操作就都顺理成章。
+理解这套 API 的关键在于：**邮箱地址与登录身份是分离的**。你用用户名密码登录得到一个访问令牌，令牌代表「你这个账户」；而收发邮件用的是一个个「邮箱地址」（如 `bot@hpc.email`）。认领后的地址归你专用。管理员还可以把自己已认领的地址共享给你：共享地址的来信会出现在你的收件里，但不能拿它当发件人。
 
 ## 核心概念
 
 - **平台账户**：用用户名 + 密码登录的身份，和具体邮箱地址分开。
-- **邮箱地址**：形如 `任意前缀@某个系统域名`（例如 `bot@hpc.email`）。普通账户要先**认领**一个地址才能用它收发；地址全局唯一，认领后专属于你。管理员账户可直接用任意地址收发，无需认领。
-- **验证码自动提取**：发到你地址的邮件，系统会自动把其中的验证码解析到 `verificationCode` 字段——这是接码类任务的核心，通常你不必再自己解析正文。
-- **发件限制**：普通账户只能用自己认领的地址作为发件人；管理员不受限。
+- **邮箱地址**：形如 `任意前缀@某个系统域名`（例如 `bot@hpc.email`）。普通账户要先**认领**一个地址才能用它收发；地址全局唯一，认领后专属于认领人。管理员账户可直接用任意地址收发，无需认领。
+- **共享邮箱**：管理员把自己已认领的地址分享给普通账户后，该账户的收件列表会包含这个地址的来信和验证码。`GET /api/mailboxes` 仍只返回自己认领的地址；共享地址在 `GET /api/mailboxes/shared`。共享不授予发信、回复、转发或删除。
+- **验证码自动提取**：发到你能读取的地址（自己认领的，或共享给你的）的邮件，系统会自动把其中的验证码解析到 `verificationCode` 字段——这是接码类任务的核心，通常你不必再自己解析正文。
+- **发件限制**：普通账户只能用自己认领的地址作为发件人，共享地址不行；管理员不受限。
 
 ## 第一步：登录拿到访问令牌
 
@@ -42,11 +43,11 @@ curl -s -X POST $BASE/api/auth/login \
 - **成功**：HTTP 2xx，响应体 `{ "data": ... }`，你要的内容在 `data` 里。
 - **失败**：HTTP 4xx/5xx，响应体 `{ "error": { "code": "...", "message": "..." }, "requestId": "..." }`。读 `error.message` 了解原因，`code` 是机器可读错误码（见文末）。
 - **邮件列表**用游标分页：请求带 `?cursor=&limit=`（都可省略，省略即第一页、默认每页 30 条），返回 `{ "data": { "items": [...], "nextCursor": "字符串或 null" } }`。`nextCursor` 非 null 时，把它作为下一页的 `cursor` 继续拉。
-- **注意**：`/api/mailboxes`、`/api/domains`、`/api/api-keys`、`/v1/mailboxes` 这几个**不分页**，`data` 直接就是数组，没有 `items` 字段——别去取 `data.items`。
+- **注意**：`/api/mailboxes`、`/api/mailboxes/shared`、`/api/domains`、`/api/api-keys`、`/v1/mailboxes`、`/v1/mailboxes/shared` 这几个**不分页**，`data` 直接就是数组，没有 `items` 字段——别去取 `data.items`。
 
 ## 任务：接收邮件 / 读取验证码（最常见）
 
-这是绝大多数自动化任务的核心。拉取收件箱最新邮件：
+这是绝大多数自动化任务的核心。拉取收件箱最新邮件。结果包含你认领的地址，以及管理员共享给你的地址上的来信：
 
 ```bash
 curl -s "$BASE/api/messages?direction=inbound&limit=10" -H "Authorization: Bearer $TOKEN"
@@ -158,6 +159,8 @@ curl -s -X POST $BASE/api/mailboxes -H "Authorization: Bearer $TOKEN" \
 
 查看已认领地址：`GET /api/mailboxes`（管理员加 `?all=1` 看全站）。释放地址：`DELETE /api/mailboxes/:id`。
 
+查看共享给你的地址（只读）：`GET /api/mailboxes/shared`。这里的地址会出现在收件列表里，不会出现在 `GET /api/mailboxes`，也不能作为 `from`。谁能看哪只邮箱由管理员在网页里分配，普通账户没有分享接口。
+
 ## 任务：标记 / 搜索 / 下载附件
 
 ```bash
@@ -167,7 +170,9 @@ curl -s -X POST $BASE/api/messages/star   -H "Authorization: Bearer $TOKEN" -H '
 curl -s -X POST $BASE/api/messages/delete -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"ids":[123]}'
 ```
 
-**管理员注意**：这三个批量接口默认只作用于**你自己认领的地址**下的邮件（防止漏传参数误改他人邮件）。
+已读是这封邮件上的一份状态：共享邮箱里，你标已读，认领它的管理员也会看到已读。删除、恢复和彻底删除只作用于你自己认领的地址，对共享地址无效。
+
+**管理员注意**：这三个批量接口默认只作用于**你自己认领的地址**下的邮件（防止漏传参数误改他人邮件）。标已读还会带上共享给你的收件。
 清理未认领地址的信时显式加 `"scope":"unclaimed"`（或 query `?scope=unclaimed`），例如 `{"ids":[123],"isRead":true,"scope":"unclaimed"}`。
 不再支持 `scope=all`（会 400）。`/v1` 的同名接口用法一致。一次最多传 500 个 id。
 
@@ -185,7 +190,8 @@ curl -s -X POST $BASE/api/messages/delete -H "Authorization: Bearer $TOKEN" -H '
 | POST | `/api/auth/login` | 登录拿 token |
 | GET | `/api/auth/me` | 当前账户信息 |
 | GET | `/api/config` | 公开配置（可用域名、注册模式）|
-| GET / POST | `/api/mailboxes` | 我的地址 / 认领 `{localPart,domain}` |
+| GET / POST | `/api/mailboxes` | 我认领的地址 / 认领 `{localPart,domain}` |
+| GET | `/api/mailboxes/shared` | 共享给我的地址（只读） |
 | GET | `/api/mailboxes/availability?localPart=&domain=` | 查地址可否认领 |
 | DELETE | `/api/mailboxes/:id` | 释放地址 |
 | GET | `/api/messages` | 收发件列表（过滤参数见「搜索」）|
@@ -225,7 +231,7 @@ curl -s -X POST $BASE/api/api-keys -H "Authorization: Bearer $TOKEN" \
   -d '{"name":"my-agent","scopes":["mail.read","mail.write","mail.send","mailbox.read","mailbox.write"]}'
 ```
 
-**scope 说明**：`mail.read`（读邮件/验证码）、`mail.write`（标记已读、删除邮件）、`mail.send`（发信/回复）、`mailbox.read`（列邮箱）、`mailbox.write`（认领/释放）。按需最小授权。
+**scope 说明**：`mail.read`（读邮件/验证码，含共享给你的收件）、`mail.write`（标记已读、删除自己认领地址下的邮件；共享地址只能标已读）、`mail.send`（发信/回复，仅自己认领的地址）、`mailbox.read`（列出认领的邮箱和共享邮箱）、`mailbox.write`（认领/释放）。按需最小授权。共享地址见 `GET /v1/mailboxes/shared`。
 
 之后用 `Authorization: Bearer hpcm_xxxx` 调用 `/v1`：
 
@@ -233,7 +239,8 @@ curl -s -X POST $BASE/api/api-keys -H "Authorization: Bearer $TOKEN" \
 |------|------|-------|------|
 | GET | `/v1/status` | — | 探活，返回 key 的 userId/role/scopes |
 | GET | `/v1/domains` | — | 可用系统域名 |
-| GET / POST | `/v1/mailboxes` | mailbox.read / mailbox.write | 列出 / 认领邮箱 |
+| GET / POST | `/v1/mailboxes` | mailbox.read / mailbox.write | 列出已认领邮箱 / 认领邮箱 |
+| GET | `/v1/mailboxes/shared` | mailbox.read | 列出共享给我的邮箱（只读，不能作为发件人） |
 | GET | `/v1/messages` | mail.read | 收发件列表（过滤参数同 `/api`）|
 | GET | `/v1/messages/wait?address=&afterId=&timeout=25` | mail.read | **长轮询**：hold 到有 `id>afterId` 的新邮件即返回，专为等验证码设计 |
 | GET | `/v1/messages/:id` | mail.read | 详情（含 verificationCode）|
@@ -266,4 +273,4 @@ curl -s "$BASE/v1/messages/wait?address=$ADDR&afterId=$LAST&timeout=25" \
 
 ---
 
-**一句话流程**：登录拿 token → 认领或选定一个地址 → `GET /api/messages` 收信读 `verificationCode` → `POST /api/messages/send` 发信/回复。
+**一句话流程**：登录拿 token → 认领地址，或使用管理员共享给你的地址 → `GET /api/messages` 收信读 `verificationCode` → 用自己认领的地址 `POST /api/messages/send` 发信/回复。

@@ -25,7 +25,7 @@ import {
   type SQL,
 } from 'drizzle-orm';
 import { createDb, type Db } from '../db/client.js';
-import { attachments as attachmentsTable, mailboxes, messages, stars } from '../db/schema.js';
+import { attachments as attachmentsTable, mailboxShares, mailboxes, messages, stars, users } from '../db/schema.js';
 import { signAttachment } from '../lib/crypto.js';
 import { chunk, D1_PAIR_BATCH } from '../lib/d1.js';
 import { AppError } from '../lib/errors.js';
@@ -115,19 +115,50 @@ function resolveMutationScope(viewer: Viewer): Scope {
   return { ownerId: viewer.userId };
 }
 
+/** 分享只加进「看自己的信」。审计他人、未认领、回收站、已发送仍只认领地址。 */
+type ScopeAccess = 'owned' | 'readable';
+
+function shareAccess(viewer: Viewer, scope: Scope): ScopeAccess {
+  if (scope !== 'unclaimed' && scope.ownerId === viewer.userId) return 'readable';
+  return 'owned';
+}
+
+function listAccess(viewer: Viewer, scope: Scope, query: { trash?: boolean; direction?: string }): ScopeAccess {
+  if (shareAccess(viewer, scope) === 'owned') return 'owned';
+  if (query.trash || query.direction === 'outbound') return 'owned';
+  return 'readable';
+}
+
+/** 分享给 userId、且认领人仍是启用中管理员的地址 */
+function sharedAddressQuery(db: Db, userId: number) {
+  return db
+    .select({ address: mailboxes.address })
+    .from(mailboxShares)
+    .innerJoin(mailboxes, eq(mailboxes.id, mailboxShares.mailboxId))
+    .innerJoin(users, eq(users.id, mailboxes.userId))
+    .where(and(eq(mailboxShares.userId, userId), eq(users.role, 'admin'), eq(users.status, 'active')));
+}
+
 /**
- * 可见范围 SQL 条件：用 mailboxes 子查询而非把地址展开成 IN (?,?,…)。
- * D1 单条查询最多 100 个绑定参数，展开时认领地址一多就会整条语句被拒；
- * 子查询无论认领多少地址都只占 1 个绑定值（ownerId），顺带省掉一次 userAddresses 查询。
+ * 可见范围 SQL 条件：用子查询而非把地址展开成 IN (?,?,…)。
+ * D1 单条查询最多 100 个绑定参数，展开时认领地址一多就会整条语句被拒。
+ * readable = 自己认领的地址，再加上分享来的未删除收件。已发送和回收站不走 readable。
  */
-function scopeCondition(db: Db, scope: Scope): SQL {
+function scopeCondition(db: Db, scope: Scope, access: ScopeAccess = 'owned'): SQL {
   if (scope === 'unclaimed') {
     return notInArray(messages.address, db.select({ address: mailboxes.address }).from(mailboxes));
   }
-  return inArray(
+  const owned = inArray(
     messages.address,
     db.select({ address: mailboxes.address }).from(mailboxes).where(eq(mailboxes.userId, scope.ownerId)),
   );
+  if (access === 'owned') return owned;
+  const sharedInbound = and(
+    eq(messages.direction, 'inbound'),
+    isNull(messages.deletedAt),
+    inArray(messages.address, sharedAddressQuery(db, scope.ownerId)),
+  );
+  return or(owned, sharedInbound) ?? owned;
 }
 
 
@@ -195,7 +226,7 @@ export async function listMessages(
   const db = createDb(env);
   const scope = resolveScope(viewer);
 
-  const conds: (SQL | undefined)[] = [scopeCondition(db, scope)];
+  const conds: (SQL | undefined)[] = [scopeCondition(db, scope, listAccess(viewer, scope, query))];
   // 回收站视图看软删除的，普通视图排除软删除的
   conds.push(query.trash ? isNotNull(messages.deletedAt) : isNull(messages.deletedAt));
   if (query.direction) conds.push(eq(messages.direction, query.direction));
@@ -261,7 +292,7 @@ export async function findNextMessage(
   const db = createDb(env);
   const scope = resolveScope(viewer);
   const conditions: SQL[] = [
-    scopeCondition(db, scope),
+    scopeCondition(db, scope, shareAccess(viewer, scope)),
     eq(messages.direction, 'inbound'),
     isNull(messages.deletedAt),
     gt(messages.id, input.afterId),
@@ -289,13 +320,14 @@ export async function findNextMessage(
  */
 export async function countUnread(env: Env, userId: number, role: Role): Promise<number> {
   const db = createDb(env);
-  const scope = resolveScope({ userId, role, scope: 'mine' });
+  const viewer: Viewer = { userId, role, scope: 'mine' };
+  const scope = resolveScope(viewer);
   const row = await db
     .select({ value: count() })
     .from(messages)
     .where(
       and(
-        scopeCondition(db, scope),
+        scopeCondition(db, scope, shareAccess(viewer, scope)),
         eq(messages.direction, 'inbound'),
         eq(messages.isRead, false),
         isNull(messages.deletedAt),
@@ -355,6 +387,7 @@ export async function getThread(env: Env, viewer: Viewer, id: number): Promise<M
     return rows.map((r) => summarize(r, attSet.has(r.id), starSet.has(r.id)));
   };
   const scope = await threadScope(db, viewer, target);
+  const access = shareAccess(viewer, scope);
   const related = new Map<number, MessageRow>([[target.id, target]]);
   const messageKeys = new Set<string>();
   const addKeys = (row: MessageRow) => {
@@ -373,7 +406,7 @@ export async function getThread(env: Env, viewer: Viewer, id: number): Promise<M
         .from(messages)
         .where(
           and(
-            scopeCondition(db, scope),
+            scopeCondition(db, scope, access),
             isNull(messages.deletedAt),
             or(inArray(messages.messageId, keys), inArray(messages.inReplyTo, keys)),
           ),
@@ -404,7 +437,7 @@ export async function getThread(env: Env, viewer: Viewer, id: number): Promise<M
     .from(messages)
     .where(
       and(
-        scopeCondition(db, scope),
+        scopeCondition(db, scope, access),
         isNull(messages.deletedAt),
         eq(messages.address, target.address),
         gte(messages.createdAt, new Date(target.createdAt.getTime() - windowMs)),
@@ -428,7 +461,8 @@ async function isAddressClaimed(db: Db, address: string): Promise<boolean> {
  * 单封可见性：
  * - scope=unclaimed → 仅未认领
  * - scope=user → 仅该用户认领
- * - 其余（含 admin 裸开无 query）→ 自己认领；admin 无 scope 时额外允许未认领
+ * - 其余（含 admin 裸开无 query）→ 自己认领的地址，外加分享给自己的未删除收件
+ * - admin 无 scope 时额外允许未认领
  */
 async function loadVisible(env: Env, viewer: Viewer, id: number): Promise<MessageRow> {
   const db = createDb(env);
@@ -445,6 +479,23 @@ async function loadVisible(env: Env, viewer: Viewer, id: number): Promise<Messag
     .where(and(eq(mailboxes.userId, scope.ownerId), eq(mailboxes.address, row.address)))
     .get();
   if (owned) return row;
+  if (shareAccess(viewer, scope) === 'readable' && row.direction === 'inbound' && row.deletedAt === null) {
+    const shared = await db
+      .select({ id: mailboxShares.mailboxId })
+      .from(mailboxShares)
+      .innerJoin(mailboxes, eq(mailboxes.id, mailboxShares.mailboxId))
+      .innerJoin(users, eq(users.id, mailboxes.userId))
+      .where(
+        and(
+          eq(mailboxShares.userId, scope.ownerId),
+          eq(mailboxes.address, row.address),
+          eq(users.role, 'admin'),
+          eq(users.status, 'active'),
+        ),
+      )
+      .get();
+    if (shared) return row;
+  }
   if (viewer.role === 'admin' && viewer.scope === undefined && !(await isAddressClaimed(db, row.address))) {
     return row;
   }
@@ -575,10 +626,11 @@ export async function markMessages(
 ): Promise<number> {
   const db = createDb(env);
   const scope = resolveMutationScope(viewer);
+  const access = shareAccess(viewer, scope);
   // ids 分批：D1 单条查询最多 100 个绑定参数，schema 允许一次传 500 个 id
   let changed = 0;
   for (const batch of chunk(ids)) {
-    const cond = and(inArray(messages.id, batch), scopeCondition(db, scope));
+    const cond = and(inArray(messages.id, batch), scopeCondition(db, scope, access));
     const result = await db.update(messages).set({ isRead }).where(cond).run();
     changed += result.meta.changes ?? 0;
   }
@@ -594,7 +646,7 @@ export async function markAllRead(env: Env, viewer: Viewer): Promise<number> {
     .set({ isRead: true })
     .where(
       and(
-        scopeCondition(db, scope),
+        scopeCondition(db, scope, shareAccess(viewer, scope)),
         eq(messages.direction, 'inbound'),
         eq(messages.isRead, false),
         isNull(messages.deletedAt),
@@ -619,7 +671,7 @@ export async function starMessages(
     const rows = await db
       .select({ id: messages.id })
       .from(messages)
-      .where(and(inArray(messages.id, batch), scopeCondition(db, scope)))
+      .where(and(inArray(messages.id, batch), scopeCondition(db, scope, shareAccess(viewer, scope))))
       .all();
     visibleIds.push(...rows.map((v) => v.id));
   }

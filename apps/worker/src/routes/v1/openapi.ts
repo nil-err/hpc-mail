@@ -66,8 +66,11 @@ const OPENAPI_SPEC = {
     '/status': { get: { summary: '探活', responses: { 200: { description: 'ok' } } } },
     '/domains': { get: { summary: '可用系统域名', responses: { 200: { description: 'ok' } } } },
     '/mailboxes': {
-      get: { summary: '列出邮箱', responses: { 200: { description: 'ok' } } },
+      get: { summary: '列出已认领邮箱', responses: { 200: { description: 'ok' } } },
       post: { summary: '认领邮箱', responses: { 201: { description: 'created' } } },
+    },
+    '/mailboxes/shared': {
+      get: { summary: '列出共享给我的邮箱（只读，不能作为发件人）', responses: { 200: { description: 'ok' } } },
     },
     '/messages': {
       get: {

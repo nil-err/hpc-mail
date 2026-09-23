@@ -44,6 +44,11 @@ const AuditPage = lazy(() =>
 const AddressesPage = lazy(() =>
   import('@/features/admin/addresses/addresses-page').then((m) => ({ default: m.AddressesPage })),
 );
+const SharedMailboxesPage = lazy(() =>
+  import('@/features/admin/shared-mailboxes/shared-mailboxes-page').then((m) => ({
+    default: m.SharedMailboxesPage,
+  })),
+);
 
 export const router = createBrowserRouter([
   {
@@ -81,6 +86,7 @@ export const router = createBrowserRouter([
           { path: 'invites', element: <InvitesPage /> },
           { path: 'domains', element: <DomainsPage /> },
           { path: 'addresses', element: <AddressesPage /> },
+          { path: 'shared-mailboxes', element: <SharedMailboxesPage /> },
           { path: 'settings', element: <SettingsPage /> },
           { path: 'audit', element: <AuditPage /> },
         ],

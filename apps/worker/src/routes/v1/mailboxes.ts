@@ -3,10 +3,17 @@ import { Hono } from 'hono';
 import { ok, parseBody } from '../../lib/http.js';
 import { apiKeyAuth, requireScope } from '../../middleware/api-key-auth.js';
 import { claimMailbox, listMailboxes } from '../../services/mailbox.js';
+import { listSharedMailboxes } from '../../services/mailbox-share.js';
 import type { AppContext } from '../../types.js';
 
 const app = new Hono<AppContext>();
 app.use('*', apiKeyAuth);
+
+app.get('/shared', async (c) => {
+  requireScope(c, 'mailbox.read');
+  const key = c.get('apiKey')!;
+  return ok(c, await listSharedMailboxes(c.env, key.userId));
+});
 
 app.get('/', async (c) => {
   requireScope(c, 'mailbox.read');

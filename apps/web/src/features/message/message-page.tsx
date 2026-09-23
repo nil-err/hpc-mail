@@ -18,6 +18,8 @@ import { IconButton } from '@/components/ui/icon-button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { toast } from '@/components/ui/toast';
 import { buildForward, buildReply, buildReplyAll, buildResend } from '@/features/compose/compose-init';
+import { useSharedMailboxesQuery } from '@/features/mailboxes/use-mailboxes';
+import { Badge } from '@/components/ui/badge';
 import { mailHref } from '@/features/inbox/mail-view';
 import { useStarMutation } from '@/features/inbox/use-star';
 import { cn } from '@/lib/cn';
@@ -47,6 +49,7 @@ export function MessagePage() {
   const [showRemoteImages, setShowRemoteImages] = useState(false);
   const markedRef = useRef(false);
 
+  const { data: sharedMailboxes, isPending: sharedPending } = useSharedMailboxesQuery();
   const { data: message, isLoading, isError } = useQuery({
     queryKey: queryKeys.messages.detail(messageId, view),
     queryFn: () => messageApi.detail(messageId, view),
@@ -95,7 +98,11 @@ export function MessagePage() {
 
   const deleteMutation = useMutation({
     mutationFn: () => messageApi.remove([messageId], mutationScope),
-    onSuccess: () => {
+    onSuccess: (result) => {
+      if (result.deleted === 0) {
+        toast({ title: '这封邮件不能删除', variant: 'error' });
+        return;
+      }
       toast({ title: '邮件已删除', variant: 'success' });
       void queryClient.invalidateQueries({ queryKey: queryKeys.messages.root });
       goBack();
@@ -159,6 +166,8 @@ export function MessagePage() {
   }
 
   const outbound = message.direction === 'outbound';
+  const shared = (sharedMailboxes ?? []).some((mailbox) => mailbox.address === message.address);
+  const canActAsOwner = !auditUser && !shared && !sharedPending;
   // 验证码 banner 只对收到的邮件有意义，自己发出的邮件不提取/不展示
   const otpCode = outbound
     ? undefined
@@ -174,7 +183,7 @@ export function MessagePage() {
           <ArrowLeft className="size-5" />
         </IconButton>
         <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1.5">
-          {!auditUser && (
+          {canActAsOwner && (
             <>
               <Button variant="secondary" size="sm" onClick={() => navigate('/compose', { state: buildReply(message) })}>
                 <Reply className="size-4" />
@@ -238,7 +247,7 @@ export function MessagePage() {
               <FileDown className="size-4" />
             </IconButton>
           )}
-          {!auditUser && (
+          {canActAsOwner && (
             <IconButton aria-label="删除邮件" onClick={() => setConfirmDelete(true)}>
               <Trash2 className="size-4 text-critical" />
             </IconButton>
@@ -259,7 +268,11 @@ export function MessagePage() {
                 收件人：<span className="text-ink-secondary">{recipients.join('、')}</span>
               </p>
             )}
-            <p className="text-ink-tertiary">{formatDateTime(message.createdAt)}</p>
+            <p className="flex flex-wrap items-center gap-2 text-ink-tertiary">
+              <span>{formatDateTime(message.createdAt)}</span>
+              <span className="text-ink-secondary">{message.address}</span>
+              {shared && <Badge tone="neutral">共享</Badge>}
+            </p>
           </div>
         </header>
 
