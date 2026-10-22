@@ -1,0 +1,192 @@
+name: Sync upstream
+
+# A2「硬对齐」策略：把 fork 的 main 硬对齐到上游最新提交，只保留本 workflow 一个本地提交；
+# 上游有更新且**部署相关路径**真的变化时，才显式 dispatch Deploy HPC Mail。
+#
+# 设计要点：
+#  - scheduled workflow 只在默认分支运行，所以本文件必须在 main 上。
+#  - GITHUB_TOKEN 触发的 push 不会触发其它 workflow；而 workflow_dispatch 是官方例外
+#    （2022-09 起 "always create workflow runs"），因此这里显式 dispatch，不需要 PAT。
+#  - reset --hard 会删掉上游没有的文件，所以同步前备份本文件、同步后写回。
+#  - 幂等：main 若已经是「上游 + 仅本 workflow 提交」的形态，直接 no-op（不产生提交、不部署）。
+#  - 安全门：main 上出现除本文件之外的本地提交则失败退出，绝不静默覆盖。
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: hpc-mail-upstream-sync
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: riba2534/hpc-mail
+  BRANCH: main
+  SELF_PATH: .github/workflows/sync-upstream.yml
+  DEPLOY_WORKFLOW: deploy.yml
+  # 与 deploy.yml 的 push paths 过滤器保持一致：这些路径变了才值得重新部署
+  DEPLOY_PATHS: apps packages scripts package.json pnpm-lock.yaml pnpm-workspace.yaml
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: 检出 fork main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: 拉取上游
+        id: upstream
+        run: |
+          set -euo pipefail
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch --no-tags upstream "${BRANCH}"
+          echo "sha=$(git rev-parse "upstream/${BRANCH}")" >> "$GITHUB_OUTPUT"
+
+      - name: 安全门（main 上不允许除本 workflow 之外的本地提交）
+        run: |
+          set -euo pipefail
+          bad=0
+          for sha in $(git rev-list "upstream/${BRANCH}..HEAD"); do
+            files=$(git show --pretty=format: --name-only "$sha" | sed '/^$/d')
+            if [ "$files" != "$SELF_PATH" ]; then
+              echo "::error::main 存在非预期本地提交 ${sha:0:7}（改动: ${files//$'\n'/, }），拒绝强制同步"
+              bad=1
+            fi
+          done
+          [ "$bad" -eq 0 ] || exit 1
+          echo "安全门通过：main 上的额外提交只有 ${SELF_PATH}"
+
+      - name: 判断是否需要同步 / 是否需要部署
+        id: plan
+        run: |
+          set -euo pipefail
+          target="${{ steps.upstream.outputs.sha }}"
+          old="$(git rev-parse HEAD)"
+
+          # ① 形态判断：HEAD 的父提交是上游，且 HEAD 与上游的差异只有本 workflow 文件
+          aligned=false
+          if [ "$(git rev-parse 'HEAD^' 2>/dev/null || echo none)" = "$target" ] \
+             && git diff --quiet "$target" HEAD -- . ":(exclude)${SELF_PATH}"; then
+            aligned=true
+          fi
+
+          # ② 部署判断：旧 main 与上游在部署相关路径上是否有差异
+          deploy=false
+          git diff --quiet "$old" "$target" -- $DEPLOY_PATHS || deploy=true
+
+          echo "aligned=$aligned" >> "$GITHUB_OUTPUT"
+          echo "deploy=$deploy" >> "$GITHUB_OUTPUT"
+          echo "old=$old" >> "$GITHUB_OUTPUT"
+          echo "target=$target" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Sync upstream 计划"
+            echo "- 上游提交: \`${target:0:7}\`"
+            echo "- 当前 main: \`${old:0:7}\`"
+            echo "- 已是「上游+workflow」形态: $aligned"
+            echo "- 部署相关路径有变化: $deploy"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$aligned" = true ] && [ "$deploy" = false ]; then
+            echo "上游无实质更新，no-op"
+          fi
+
+      - name: 硬对齐到上游并写回本 workflow
+        id: align
+        if: steps.plan.outputs.aligned != 'true'
+        env:
+          # 推送身份优先级：部署密钥（SSH，可推送 workflow 文件改动）> SYNC_PAT > GITHUB_TOKEN
+          SYNC_SSH_KEY: ${{ secrets.SYNC_DEPLOY_KEY }}
+          SYNC_PAT: ${{ secrets.SYNC_PAT }}
+        run: |
+          set -euo pipefail
+          target="${{ steps.plan.outputs.target }}"
+
+          if [ -n "${SYNC_SSH_KEY}" ]; then
+            identity=deploy-key
+            mkdir -p ~/.ssh && chmod 700 ~/.ssh
+            printf '%s\n' "$SYNC_SSH_KEY" > ~/.ssh/id_ed25519
+            chmod 600 ~/.ssh/id_ed25519
+            ssh-keyscan -t rsa,ecdsa,ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null || true
+            git remote set-url origin "git@github.com:${GITHUB_REPOSITORY}.git"
+          elif [ -n "${SYNC_PAT}" ]; then
+            identity=pat
+            echo "::add-mask::${SYNC_PAT}"
+            git remote set-url origin "https://x-access-token:${SYNC_PAT}@github.com/${GITHUB_REPOSITORY}.git"
+          else
+            identity=github-token
+            git remote set-url origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git"
+            # 预检：上游是否改动了 .github/workflows/**（GITHUB_TOKEN 无权推送这类改动）
+            wf_changes="$(git diff --name-only "origin/${BRANCH}" "${target}" -- .github/workflows | grep -v "^${SELF_PATH}$" || true)"
+            if [ -n "$wf_changes" ]; then
+              echo "::error::上游本次修改了 workflow 文件（$(echo "$wf_changes" | tr '\n' ' ')），GITHUB_TOKEN 作为 GitHub App 无权推送这类改动。"
+              echo "::error::处理：① 配置 secrets.SYNC_DEPLOY_KEY（部署密钥，推荐）或 secrets.SYNC_PAT（fine-grained PAT: Contents + Workflows 读写）；或 ② 本地执行 gh repo sync --force -b main。"
+              exit 1
+            fi
+          fi
+          echo "  推送身份: ${identity}"
+          cp "$SELF_PATH" /tmp/sync-upstream.yml
+          git reset --hard "$target"
+          mkdir -p "$(dirname "$SELF_PATH")"
+          cp /tmp/sync-upstream.yml "$SELF_PATH"
+          git add "$SELF_PATH"
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -m "chore(ci): 对齐上游 ${target:0:7}（保留 sync-upstream workflow）"
+          git push --force origin "HEAD:${BRANCH}"
+          sha="$(git rev-parse HEAD)"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "- 已硬对齐，main 现在: \`${sha:0:7}\`（推送身份: ${identity}）" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 触发部署（若 push 已自动触发则跳过，避免重复部署）
+        if: steps.plan.outputs.deploy == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          id=""
+          # 部署密钥推送会像普通用户推送一样触发 push 事件（GITHUB_TOKEN 推送则不会），
+          # 先等最多 60 秒看是否已有对应 sha 的部署在跑，避免同一提交部署两次。
+          for _ in $(seq 1 6); do
+            id=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$DEPLOY_WORKFLOW" -L 10 \
+                  --json databaseId,headSha \
+                  --jq "[.[] | select(.headSha==\"${sha}\")][0].databaseId // empty")
+            [ -n "$id" ] && break
+            sleep 10
+          done
+          if [ -n "$id" ]; then
+            echo "已有部署运行（$id，push 触发），跳过显式 dispatch"
+          else
+            gh workflow run "$DEPLOY_WORKFLOW" --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"
+            echo "已显式 dispatch 部署（该推送身份不触发 push 事件）"
+          fi
+
+      - name: 等待部署结果
+        if: steps.plan.outputs.deploy == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          id=""
+          for _ in $(seq 1 30); do
+            id=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$DEPLOY_WORKFLOW" -L 15 \
+                  --json databaseId,headSha \
+                  --jq "[.[] | select(.headSha==\"${sha}\")][0].databaseId // empty")
+            [ -n "$id" ] && break
+            sleep 10
+          done
+          if [ -z "$id" ]; then
+            echo "::error::未找到本次同步触发的部署运行（headSha=${sha:0:7}）"
+            exit 1
+          fi
+          echo "- 部署运行: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${id}" >> "$GITHUB_STEP_SUMMARY"
+          gh run watch "$id" --repo "$GITHUB_REPOSITORY" --exit-status --interval 20
