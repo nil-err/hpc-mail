@@ -1,5 +1,5 @@
 import { Search, SlidersHorizontal } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
 import { FilterChip } from '@/components/ui/filter-chip';
@@ -7,6 +7,7 @@ import { inputClassName } from '@/components/ui/input';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { Sheet, SheetContent } from '@/components/ui/sheet';
 import { cn } from '@/lib/cn';
+import { sortedTexts } from '@/lib/sort';
 import { SEARCH_SHORTCUT_ATTR } from '@/lib/use-keyboard-shortcuts';
 import type { InboxFilters } from './use-inbox-filters';
 
@@ -41,12 +42,13 @@ function DomainChips({
   onChange: (domain: string | null) => void;
   className?: string;
 }) {
+  const sorted = useMemo(() => sortedTexts(domains), [domains]);
   return (
     <div role="group" aria-label="按域名筛选" className={cn('flex items-center gap-2', className)}>
       <FilterChip className="shrink-0" active={value === null} onClick={() => onChange(null)}>
         全部域名
       </FilterChip>
-      {domains.map((domain) => (
+      {sorted.map((domain) => (
         <FilterChip key={domain} className="shrink-0" active={value === domain} onClick={() => onChange(domain)}>
           {domain}
         </FilterChip>
@@ -87,8 +89,10 @@ export function FilterBar({
     (filters.domain ? 1 : 0) + (filters.address ? 1 : 0) + (showUnread && filters.unread ? 1 : 0);
   const hasSheetFilters = domains.length > 0 || addressOptions.length > 0 || showUnread;
 
-  const addressPicker = addressOptions.length > 0 && (
+  // 底部面板是 Dialog，里面的下拉需要 modal 才能滚动；桌面端保持非 modal，点外部一次即可操作
+  const addressPicker = (modal: boolean) => addressOptions.length > 0 && (
     <Combobox
+      modal={modal}
       aria-label={addressLabel}
       value={filters.address}
       onChange={onAddressChange}
@@ -118,7 +122,7 @@ export function FilterBar({
       )}
 
       <div className="flex items-center gap-2">
-        {addressPicker && <div className="hidden w-64 shrink-0 sm:block">{addressPicker}</div>}
+        {addressOptions.length > 0 && <div className="hidden w-64 shrink-0 sm:block">{addressPicker(false)}</div>}
         {unreadPicker && <div className="hidden shrink-0 sm:block">{unreadPicker}</div>}
         <div className="relative min-w-0 flex-1">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-ink-tertiary" />
@@ -159,10 +163,10 @@ export function FilterBar({
                 <DomainChips domains={domains} value={filters.domain} onChange={onDomainChange} className="flex-wrap" />
               </section>
             )}
-            {addressPicker && (
+            {addressOptions.length > 0 && (
               <section className="flex flex-col gap-2">
                 <h3 className="text-sm font-semibold text-ink-secondary">地址</h3>
-                {addressPicker}
+                {addressPicker(true)}
               </section>
             )}
             {unreadPicker && (

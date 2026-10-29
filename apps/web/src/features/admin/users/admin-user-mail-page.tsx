@@ -14,13 +14,14 @@ import { FilterBar } from '@/features/inbox/filter-bar';
 import { MailList } from '@/features/inbox/mail-list';
 import { useInboxFilters } from '@/features/inbox/use-inbox-filters';
 import { useAdminMailDirection } from '@/features/admin/mail/admin-mail-page';
+import { sortedTexts } from '@/lib/sort';
 
 /** 用户实际拥有的域名：从其认领地址取 @ 之后的部分，去重排序 */
 export function ownedDomains(addresses: readonly string[]): string[] {
   const domains = addresses
     .map((address) => address.slice(address.lastIndexOf('@') + 1).toLowerCase())
     .filter(Boolean);
-  return [...new Set(domains)].sort();
+  return sortedTexts([...new Set(domains)]);
 }
 
 const DIRECTION_OPTIONS = [
@@ -40,7 +41,7 @@ export function AdminUserMailPage() {
 
   const addressOptions = useMemo<ComboboxOption[]>(
     () =>
-      (user?.mailboxes ?? []).map((address) => ({
+      sortedTexts(user?.mailboxes ?? []).map((address) => ({
         value: address,
         label: address,
       })),

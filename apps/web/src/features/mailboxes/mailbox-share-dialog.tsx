@@ -6,10 +6,11 @@ import { invalidateMailboxOwnership, queryKeys } from '@/api/query-keys';
 import { adminApi, mailboxApi } from '@/api/resources';
 import { QueryErrorState } from '@/components/query-error-state';
 import { Button } from '@/components/ui/button';
+import { Combobox } from '@/components/ui/combobox';
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from '@/components/ui/toast';
+import { compareText } from '@/lib/sort';
 
 function errorText(error: unknown, fallback: string): string {
   return error instanceof ApiError ? error.message : fallback;
@@ -33,6 +34,10 @@ export function MailboxShareDialog({
   const [picked, setPicked] = useState<Array<{ id: number; username: string; status: string }>>([]);
 
   const current = grants.find((item) => item.mailboxId === mailboxId);
+  const mailboxOptions = useMemo(
+    () => [...grants].sort((a, b) => compareText(a.address, b.address)).map((item) => ({ value: String(item.mailboxId), label: item.address })),
+    [grants],
+  );
   const normalized = userQuery.trim().toLowerCase();
   const [debounced, setDebounced] = useState('');
   useEffect(() => {
@@ -112,28 +117,25 @@ export function MailboxShareDialog({
             <p className="break-all rounded-md border border-line bg-canvas px-3 py-2 text-sm font-medium text-ink">
               {current?.address}
             </p>
-          ) : <Select
-            disabled={save.isPending || grants.length === 1}
-            value={mailboxId ? String(mailboxId) : undefined}
-            onValueChange={(value) => {
+          ) : <Combobox
+            aria-label="选择邮箱"
+            disabled={save.isPending}
+            value={mailboxId ? String(mailboxId) : null}
+            onChange={(value) => {
+              if (!value) return;
               const nextId = Number(value);
               setMailboxId(nextId);
               setPicked([]);
               const next = grants.find((item) => item.mailboxId === nextId);
               setSelected(next?.grantees.map((grantee) => grantee.userId) ?? []);
             }}
-          >
-            <SelectTrigger aria-label="选择邮箱">
-              <SelectValue placeholder="选择要共享的邮箱" />
-            </SelectTrigger>
-            <SelectContent>
-              {grants.map((item) => (
-                <SelectItem key={item.mailboxId} value={String(item.mailboxId)}>
-                  {item.address}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>}
+            options={mailboxOptions}
+            clearable={false}
+            modal
+            placeholder="选择要共享的邮箱"
+            searchPlaceholder="搜索邮箱地址…"
+            emptyText="没有匹配的邮箱"
+          />}
           <Input
             aria-label="搜索共享用户"
             disabled={save.isPending}
