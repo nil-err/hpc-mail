@@ -16,6 +16,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { toast } from '@/components/ui/toast';
 import { useMailboxesQuery, useSharedMailboxesQuery } from '@/features/mailboxes/use-mailboxes';
 import { useDomains } from '@/lib/use-config';
+import { compareText } from '@/lib/sort';
 import { FilterBar } from './filter-bar';
 import { inboxListQuery } from './inbox-query';
 import { MailList } from './mail-list';
@@ -26,8 +27,7 @@ import { useUnreadCount } from './use-unread-count';
 /** 未读数由服务端封顶计数（UNREAD_COUNT_CAP），到顶时只知道「至少这么多」 */
 const formatUnreadTotal = (count: number) => (count >= UNREAD_COUNT_CAP ? `${UNREAD_COUNT_CAP}+` : String(count));
 
-const byDomainThenAddress = (a: { domain: string; address: string }, b: { domain: string; address: string }) =>
-  a.domain.localeCompare(b.domain) || a.address.localeCompare(b.address);
+const byAddress = (a: { address: string }, b: { address: string }) => compareText(a.address, b.address);
 
 export function InboxPage() {
   const { filters, setDomain, setAddress, setUnread, setQuery, clearFacets, reset } = useInboxFilters();
@@ -70,12 +70,12 @@ export function InboxPage() {
     onError: () => toast({ title: '操作失败，请重试', variant: 'error' }),
   });
 
-  // 地址下拉：按域名分组排序（自己的在前、共享的在后），选了域名时只列该域名下的地址
+  // 地址下拉：按地址字典序排列（自己的在前、共享的在后），选了域名时只列该域名下的地址
   const addressOptions = useMemo<ComboboxOption[]>(() => {
     const inDomain = (domain: string) => !filters.domain || domain === filters.domain;
     const owned = (mailboxes ?? [])
       .filter((mailbox) => inDomain(mailbox.domain))
-      .sort(byDomainThenAddress)
+      .sort(byAddress)
       .map((mailbox) => ({
         value: mailbox.address,
         label: mailbox.address,
@@ -84,7 +84,7 @@ export function InboxPage() {
     const ownedAddresses = new Set((mailboxes ?? []).map((mailbox) => mailbox.address));
     const shared = (sharedMailboxes ?? [])
       .filter((mailbox) => !ownedAddresses.has(mailbox.address) && inDomain(mailbox.domain))
-      .sort(byDomainThenAddress)
+      .sort(byAddress)
       .map((mailbox) => ({
         value: mailbox.address,
         label: mailbox.address,

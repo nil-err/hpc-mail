@@ -20,8 +20,6 @@ const mocks = vi.hoisted(() => {
     async (_localPart = '', _domain = '', _strategy?: Draft['strategy']): Promise<{ available: boolean; reason?: string }> => ({ available: true }),
   );
   return {
-    selectContentRender: vi.fn(),
-    selectItemRender: vi.fn(),
     idOf,
     mailbox,
     claimOne,
@@ -86,20 +84,6 @@ vi.mock('@/api/resources', () => ({
   },
   adminApi: { listUsers: mocks.listUsers },
 }));
-vi.mock('@/components/ui/select', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/components/ui/select')>();
-  return {
-    ...actual,
-    SelectContent: (props: Parameters<typeof actual.SelectContent>[0]) => {
-      mocks.selectContentRender();
-      return <actual.SelectContent {...props} />;
-    },
-    SelectItem: (props: Parameters<typeof actual.SelectItem>[0]) => {
-      mocks.selectItemRender();
-      return <actual.SelectItem {...props} />;
-    },
-  };
-});
 vi.mock('@/components/ui/toast', () => ({ toast: mocks.toast }));
 vi.mock('@/components/ui/copy-button', () => ({ writeClipboard: mocks.writeClipboard }));
 import { ClaimDialog } from './claim-dialog';
@@ -607,6 +591,20 @@ describe('随机后缀模式', () => {
     client.clear();
   });
 
+  it('域名下拉按字典序排列并可搜索，默认域名仍是服务端给出的第一个', async () => {
+    const { client } = renderDialog(['c.test', 'a.test', 'b.test']);
+    const trigger = screen.getByRole('combobox', { name: '域名' });
+    expect(trigger).toHaveTextContent('c.test');
+    fireEvent.click(trigger);
+    const listbox = await screen.findByRole('listbox');
+    expect(within(listbox).getAllByRole('option').map((option) => option.textContent)).toEqual(['a.test', 'b.test', 'c.test']);
+    fireEvent.change(screen.getByRole('searchbox', { name: '搜索域名' }), { target: { value: 'b' } });
+    expect(within(listbox).getAllByRole('option').map((option) => option.textContent)).toEqual(['b.test']);
+    fireEvent.click(within(listbox).getByRole('option', { name: 'b.test' }));
+    await waitFor(() => expect(trigger).toHaveTextContent('b.test'));
+    client.clear();
+  });
+
   it('999 行与 64 个域名只挂载展开行的选项，选择后保持正确域名', async () => {
     const domains = Array.from({ length: 64 }, (_, index) => `domain${index}.test`);
     const { client } = renderDialog(domains);
@@ -615,8 +613,7 @@ describe('随机后缀模式', () => {
       setCount('999');
       randomize();
       expect(form.querySelectorAll('input[aria-label^="前缀"]')).toHaveLength(999);
-      expect(mocks.selectContentRender).not.toHaveBeenCalled();
-      expect(mocks.selectItemRender).not.toHaveBeenCalled();
+      expect(screen.queryAllByRole('option')).toHaveLength(0);
       const first = form.querySelector<HTMLButtonElement>('button[aria-label="域名 1"]')!;
       expect(first).toHaveTextContent(domains[0]!);
       fireEvent.click(first);

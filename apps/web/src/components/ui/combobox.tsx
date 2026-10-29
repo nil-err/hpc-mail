@@ -1,6 +1,6 @@
 import * as PopoverPrimitive from '@radix-ui/react-popover';
 import { Check, ChevronsUpDown, X } from 'lucide-react';
-import { type KeyboardEvent, useMemo, useState } from 'react';
+import { type KeyboardEvent, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { cn } from '@/lib/cn';
 
 export interface ComboboxOption {
@@ -12,16 +12,22 @@ export interface ComboboxOption {
 export interface ComboboxProps {
   value: string | null;
   onChange: (value: string | null) => void;
+  /** 按传入顺序展示；排序由调用方决定（如置顶「自定义」项） */
   options: ComboboxOption[];
   placeholder?: string;
   searchPlaceholder?: string;
   emptyText?: string;
   clearable?: boolean;
   disabled?: boolean;
+  invalid?: boolean;
   className?: string;
+  id?: string;
   'aria-label'?: string;
+  'aria-describedby'?: string;
+  'aria-invalid'?: boolean;
 }
 
+/** 带搜索框的下拉选择：按标签与说明做不区分大小写的包含匹配 */
 export function Combobox({
   value,
   onChange,
@@ -31,21 +37,32 @@ export function Combobox({
   emptyText = '无匹配项',
   clearable = true,
   disabled,
+  invalid,
   className,
+  id,
   ...aria
 }: ComboboxProps) {
+  const isInvalid = invalid ?? aria['aria-invalid'] === true;
+  const listId = useId();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
+  const listRef = useRef<HTMLDivElement>(null);
 
   const selected = options.find((option) => option.value === value) ?? null;
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return options;
     return options.filter(
-      (option) => option.label.toLowerCase().includes(q) || option.value.toLowerCase().includes(q),
+      (option) => option.label.toLowerCase().includes(q) || option.description?.toLowerCase().includes(q),
     );
   }, [options, query]);
+
+  // 键盘移动或打开时，让高亮项保持在可视区域内
+  useEffect(() => {
+    if (!open) return;
+    listRef.current?.querySelector<HTMLElement>(`[data-index="${active}"]`)?.scrollIntoView({ block: 'nearest' });
+  }, [open, active, filtered]);
 
   const commit = (option: ComboboxOption) => {
     onChange(option.value);
@@ -70,25 +87,35 @@ export function Combobox({
   };
 
   return (
+    // modal：在 Dialog 内使用时由弹层接管滚动锁，否则 Dialog 的锁会吞掉列表的滚轮
     <PopoverPrimitive.Root
+      modal
       open={open}
       onOpenChange={(next) => {
         setOpen(next);
         if (next) {
           setQuery('');
-          setActive(0);
+          setActive(Math.max(options.findIndex((option) => option.value === value), 0));
         }
       }}
     >
-      <div className="relative">
+      <div className="relative min-w-0">
         <PopoverPrimitive.Trigger asChild>
           <button
             type="button"
+            role="combobox"
+            id={id}
             disabled={disabled}
             aria-label={aria['aria-label']}
+            aria-describedby={aria['aria-describedby']}
+            aria-invalid={isInvalid || undefined}
+            aria-expanded={open}
+            aria-haspopup="listbox"
+            aria-controls={open ? listId : undefined}
             className={cn(
               'flex h-9 w-full items-center justify-between gap-2 rounded-md border border-line-strong bg-surface pl-3 text-sm outline-none transition-[border-color,box-shadow]',
               'focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-60',
+              isInvalid && 'border-critical focus:border-critical focus:ring-critical/20',
               clearable && selected ? 'pr-14' : 'pr-3',
               className,
             )}
@@ -114,12 +141,15 @@ export function Combobox({
         <PopoverPrimitive.Content
           align="start"
           sideOffset={6}
-          className="z-50 w-[var(--radix-popover-trigger-width)] overflow-hidden rounded-lg border border-line bg-surface shadow-md"
+          className="z-50 w-max min-w-[max(var(--radix-popover-trigger-width),14rem)] max-w-[min(28rem,calc(100vw-2rem))] overflow-hidden rounded-lg border border-line bg-surface shadow-md"
         >
           <div className="border-b border-line p-2">
             {/* eslint-disable-next-line jsx-a11y/no-autofocus */}
             <input
               autoFocus
+              type="search"
+              aria-label={searchPlaceholder.replace(/…$/, '')}
+              aria-controls={listId}
               value={query}
               onChange={(event) => {
                 setQuery(event.target.value);
@@ -127,10 +157,13 @@ export function Combobox({
               }}
               onKeyDown={handleKeyDown}
               placeholder={searchPlaceholder}
+              autoComplete="off"
+              autoCapitalize="none"
+              spellCheck={false}
               className="h-8 w-full rounded-md bg-surface px-2 text-sm text-ink outline-none placeholder:text-ink-tertiary"
             />
           </div>
-          <div role="listbox" className="max-h-60 overflow-y-auto p-1">
+          <div ref={listRef} id={listId} role="listbox" aria-label={aria['aria-label']} className="max-h-60 overflow-y-auto p-1">
             {filtered.length === 0 ? (
               <p className="px-2 py-6 text-center text-sm text-ink-tertiary">{emptyText}</p>
             ) : (
@@ -139,6 +172,7 @@ export function Combobox({
                   key={option.value}
                   type="button"
                   role="option"
+                  data-index={index}
                   aria-selected={option.value === value}
                   onMouseEnter={() => setActive(index)}
                   onClick={() => commit(option)}

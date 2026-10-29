@@ -14,6 +14,10 @@ import { Input } from '@/components/ui/input';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/components/ui/toast';
+import { sortedTexts } from '@/lib/sort';
+
+/** 域名多于这个数时显示筛选框 */
+const DOMAIN_FILTER_THRESHOLD = 6;
 
 const limitError = (value: string) => value.trim() !== '' && Number.isInteger(Number(value)) && Number(value) >= 0 && Number(value) <= 10000
   ? undefined : '请输入 0–10000 的整数';
@@ -28,6 +32,7 @@ export function MailboxPolicyDialog({ target, onClose }: { target: AdminUser | n
   const [customInitialized, setCustomInitialized] = useState(false);
   const [errors, setErrors] = useState<Record<string, string | undefined>>({});
   const [error, setError] = useState<string | null>(null);
+  const [domainQuery, setDomainQuery] = useState('');
   const [conflict, setConflict] = useState(false);
   const [reloading, setReloading] = useState(false);
 
@@ -40,6 +45,7 @@ export function MailboxPolicyDialog({ target, onClose }: { target: AdminUser | n
     setErrors({});
     setError(null);
     setConflict(false);
+    setDomainQuery('');
   }
 
   useEffect(() => {
@@ -118,7 +124,12 @@ export function MailboxPolicyDialog({ target, onClose }: { target: AdminUser | n
   const entries = settings.data?.domains.list ?? [];
   const configured = new Set(entries.map(({ domain }) => domain));
   const missing = Object.keys(limits).filter((domain) => !configured.has(domain));
-  const domainNames = [...entries.map(({ domain }) => domain), ...missing];
+  const domainNames = sortedTexts([...entries.map(({ domain }) => domain), ...missing]);
+  const domainTerm = domainQuery.trim().toLowerCase();
+  // 已移除的域名始终显示，保证「取消已移除域名的授权」提示可操作
+  const shownDomains = domainTerm
+    ? domainNames.filter((domain) => domain.includes(domainTerm) || !configured.has(domain))
+    : domainNames;
   const locked = mutation.isPending || reloading;
   const saveDisabled = locked || conflict || (mode === 'custom' && (!settings.data || settings.isError || missing.length > 0));
 
@@ -151,7 +162,21 @@ export function MailboxPolicyDialog({ target, onClose }: { target: AdminUser | n
                   </FormField>
                   <div className="flex flex-col gap-2">
                     <span className="text-sm font-medium text-ink">可认领域名与各域名上限</span>
-                    {domainNames.map((domain) => {
+                    {domainNames.length >= DOMAIN_FILTER_THRESHOLD && (
+                      <Input
+                        type="search"
+                        aria-label="搜索域名"
+                        placeholder="搜索域名…"
+                        autoComplete="off"
+                        autoCapitalize="none"
+                        spellCheck={false}
+                        value={domainQuery}
+                        onChange={(event) => setDomainQuery(event.target.value)}
+                        // 回车只用于筛选，不提交整个表单
+                        onKeyDown={(event) => { if (event.key === 'Enter') event.preventDefault(); }}
+                      />
+                    )}
+                    {shownDomains.map((domain) => {
                       const entry = entries.find((candidate) => candidate.domain === domain);
                       const selected = limits[domain] !== undefined;
                       const owned = target?.mailboxes.filter((address) => address.endsWith(`@${domain}`)).length ?? 0;
@@ -180,6 +205,7 @@ export function MailboxPolicyDialog({ target, onClose }: { target: AdminUser | n
                       );
                     })}
                     {domainNames.length === 0 && <p className="text-sm text-ink-secondary">尚未配置系统域名。</p>}
+                    {domainNames.length > 0 && shownDomains.length === 0 && <p className="text-sm text-ink-secondary">没有匹配的域名。</p>}
                     {Object.keys(limits).length === 0 && <p className="text-xs text-ink-tertiary">未选择域名：该用户将不能新增认领邮箱。</p>}
                     {missing.length > 0 && <p role="alert" className="text-xs text-critical">请取消已移除域名的授权后保存。</p>}
                   </div>

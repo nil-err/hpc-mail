@@ -1,20 +1,21 @@
 import { useQueries, useQueryClient } from '@tanstack/react-query';
 import { Check, Share2, Shuffle, X } from 'lucide-react';
-import { type FormEvent, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { type FormEvent, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { type ClaimPlan, type ClaimPlanStrategy, claimMailboxRequestSchema, localPartSchema, MAX_BATCH_CLAIM, MAX_BATCH_SHARE_MAILBOXES } from '@hpc-mail/shared';
 import { ApiError } from '@/api/errors';
 import { invalidateMailboxOwnership, queryKeys } from '@/api/query-keys';
 import { mailboxApi } from '@/api/resources';
 import { Button } from '@/components/ui/button';
+import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
 import { writeClipboard } from '@/components/ui/copy-button';
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader } from '@/components/ui/dialog';
 import { IconButton } from '@/components/ui/icon-button';
 import { Input } from '@/components/ui/input';
 import { SegmentedControl, type SegmentedOption } from '@/components/ui/segmented-control';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/cn';
+import { sortedTexts } from '@/lib/sort';
 import { useCurrentUser } from '@/lib/use-session';
 import { BATCH_SHARE_DESCRIPTION, BatchSharePanel, batchShareTitle } from './batch-share-panel';
 import {
@@ -92,30 +93,27 @@ function announceClaimed(address: string) {
   });
 }
 
-/** 仅展开的那一行挂载域名选项，避免大批量地址把隐藏选项重复渲染数万次。 */
-function DomainSelect({ value, domains, label, disabled, onValueChange }: {
+/** 选项只在展开时挂载（Popover 关闭即卸载），大批量地址不会重复渲染数万个选项。 */
+function DomainSelect({ value, options, label, disabled, onValueChange }: {
   value: string;
-  domains: string[];
+  options: ComboboxOption[];
   label: string;
   disabled: boolean;
   onValueChange: (value: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const selectDomain = (next: string) => {
-    // 隐藏选项卸载时 Radix 的原生表单桥接可能发出空值，不把它当成域名选择。
-    if (domains.includes(next)) onValueChange(next);
-  };
   return (
-    <Select value={value} onValueChange={selectDomain} disabled={disabled} open={open} onOpenChange={setOpen}>
-      <SelectTrigger aria-label={label} className="h-9 w-auto min-w-0 max-w-full gap-1.5 px-2.5">
-        <SelectValue placeholder="选择域名">{value}</SelectValue>
-      </SelectTrigger>
-      {open && (
-        <SelectContent>
-          {domains.map((domain) => <SelectItem key={domain} value={domain}>{domain}</SelectItem>)}
-        </SelectContent>
-      )}
-    </Select>
+    <Combobox
+      aria-label={label}
+      value={value}
+      onChange={(next) => { if (next) onValueChange(next); }}
+      options={options}
+      clearable={false}
+      disabled={disabled}
+      placeholder="选择域名"
+      searchPlaceholder="搜索域名…"
+      emptyText="没有匹配的域名"
+      className="w-auto min-w-0 max-w-full gap-1.5 px-2.5"
+    />
   );
 }
 
@@ -151,6 +149,8 @@ export function ClaimDialog({ open, onOpenChange, domains, initialDomain }: Clai
   const currentUser = useCurrentUser();
   const count = parseBatchCount(countText);
   const strategy = mode === 'claude' ? 'claude' : undefined;
+  /** 下拉按字典序展示；默认域名仍取 domains[0]（服务端给出的顺序） */
+  const domainOptions = useMemo(() => sortedTexts(domains).map((item) => ({ value: item, label: item })), [domains]);
   /** 同一轮发起的可用性查询（随机生成一批）合成一次批量请求 */
   const [checkAvailability] = useState(() =>
     createAvailabilityLoader({
@@ -596,7 +596,7 @@ export function ClaimDialog({ open, onOpenChange, domains, initialDomain }: Clai
                             {domains.length > 1 ? (
                               <DomainSelect
                                 value={row.domain}
-                                domains={domains}
+                                options={domainOptions}
                                 label={multiple ? `域名 ${index + 1}` : '域名'}
                                 disabled={claiming}
                                 onValueChange={(value) => changeDomain(row.id, value)}

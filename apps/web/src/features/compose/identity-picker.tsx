@@ -1,8 +1,9 @@
 import type { Mailbox } from '@hpc-mail/shared';
+import { useMemo } from 'react';
+import { Combobox } from '@/components/ui/combobox';
 import { FormField } from '@/components/ui/form-field';
 import { Input } from '@/components/ui/input';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { cn } from '@/lib/cn';
+import { compareText, sortedTexts } from '@/lib/sort';
 
 export interface IdentityPickerProps {
   isAdmin: boolean;
@@ -19,7 +20,7 @@ export interface IdentityPickerProps {
   id?: string;
 }
 
-const invalidTrigger = 'border-critical focus:border-critical focus:ring-critical/20';
+const CUSTOM = 'custom';
 
 export function IdentityPicker({
   isAdmin,
@@ -34,6 +35,13 @@ export function IdentityPicker({
   error,
   id,
 }: IdentityPickerProps) {
+  // 下拉一律按地址/域名字典序，可搜索
+  const mailboxOptions = useMemo(
+    () => [...mailboxes].sort((a, b) => compareText(a.address, b.address)).map((mailbox) => ({ value: String(mailbox.id), label: mailbox.address })),
+    [mailboxes],
+  );
+  const domainOptions = useMemo(() => sortedTexts(domains).map((item) => ({ value: item, label: item })), [domains]);
+
   if (isAdmin) {
     const custom = mailboxId === null;
     return (
@@ -45,13 +53,16 @@ export function IdentityPicker({
         description="可选择已有邮箱（含保留的旧域邮箱），或填写系统域名下的地址。"
       >
         {(field) => (
-          <Select value={mailboxId ? String(mailboxId) : 'custom'} onValueChange={(value) => { if (value) onMailboxId(value === 'custom' ? null : Number(value)); }}>
-            <SelectTrigger {...field} className={cn(!custom && error && invalidTrigger)}><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="custom">自定义发件地址</SelectItem>
-              {mailboxes.map((mailbox) => <SelectItem key={mailbox.id} value={String(mailbox.id)}>{mailbox.address}</SelectItem>)}
-            </SelectContent>
-          </Select>
+          <Combobox
+            {...field}
+            invalid={!custom && Boolean(error)}
+            value={mailboxId ? String(mailboxId) : CUSTOM}
+            onChange={(value) => { if (value) onMailboxId(value === CUSTOM ? null : Number(value)); }}
+            options={[{ value: CUSTOM, label: '自定义发件地址' }, ...mailboxOptions]}
+            clearable={false}
+            searchPlaceholder="搜索邮箱地址…"
+            emptyText="没有匹配的邮箱"
+          />
         )}
       </FormField>
       {custom && <FormField label="发件地址" htmlFor={id && `${id}-local`} description="管理员可用任意前缀 + 系统域名发件。" error={error} required>
@@ -68,18 +79,16 @@ export function IdentityPicker({
             />
             <span className="text-sm text-ink-tertiary">@</span>
             <div className="w-48">
-              <Select value={domain} onValueChange={onDomain}>
-                <SelectTrigger aria-label="发件域名">
-                  <SelectValue placeholder="域名" />
-                </SelectTrigger>
-                <SelectContent>
-                  {domains.map((item) => (
-                    <SelectItem key={item} value={item}>
-                      {item}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Combobox
+                aria-label="发件域名"
+                value={domain || null}
+                onChange={(value) => { if (value) onDomain(value); }}
+                options={domainOptions}
+                clearable={false}
+                placeholder="域名"
+                searchPlaceholder="搜索域名…"
+                emptyText="没有匹配的域名"
+              />
             </div>
           </div>
         )}
@@ -91,21 +100,17 @@ export function IdentityPicker({
   return (
     <FormField label="发件地址" htmlFor={id} error={error} required>
       {(field) => (
-        <Select
-          value={mailboxId ? String(mailboxId) : ''}
-          onValueChange={(value) => { if (value) onMailboxId(Number(value)); }}
-        >
-          <SelectTrigger {...field} className={cn(error && invalidTrigger)}>
-            <SelectValue placeholder={mailboxes.length === 0 ? '请先认领一个地址' : '选择发件地址'} />
-          </SelectTrigger>
-          <SelectContent>
-            {mailboxes.map((mailbox) => (
-              <SelectItem key={mailbox.id} value={String(mailbox.id)}>
-                {mailbox.address}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <Combobox
+          {...field}
+          invalid={Boolean(error)}
+          value={mailboxId ? String(mailboxId) : null}
+          onChange={(value) => { if (value) onMailboxId(Number(value)); }}
+          options={mailboxOptions}
+          clearable={false}
+          placeholder={mailboxes.length === 0 ? '请先认领一个地址' : '选择发件地址'}
+          searchPlaceholder="搜索邮箱地址…"
+          emptyText={mailboxes.length === 0 ? '还没有认领的地址' : '没有匹配的邮箱'}
+        />
       )}
     </FormField>
   );

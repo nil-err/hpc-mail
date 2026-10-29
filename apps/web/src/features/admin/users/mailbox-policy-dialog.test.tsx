@@ -128,3 +128,19 @@ describe('邮箱权限弹窗', () => {
     await waitFor(() => expect(mocks.updateUser).toHaveBeenCalledWith(8, { mailboxPolicy: null, expectedMailboxPolicyRevision: 7 }));
   });
 });
+
+describe('邮箱权限弹窗的域名列表', () => {
+  it('按字典序排列，域名较多时可搜索筛选', async () => {
+    const names = ['zeta.example', 'alpha.example', 'mid.example', 'beta.example', 'omega.example', 'gamma.example'];
+    mocks.getSettings.mockResolvedValue({ ...settings, domains: { list: names.map((domain) => ({ domain, public: true, perUserLimit: 1 })) } });
+    show(user({ mailboxes: [] }));
+    await custom();
+    const boxes = () => screen.getAllByRole('checkbox').map((box) => box.getAttribute('aria-label'));
+    expect(boxes()).toEqual([...names].sort().map((domain) => `允许 ${domain}`));
+    fireEvent.change(screen.getByRole('searchbox', { name: '搜索域名' }), { target: { value: 'ETA' } });
+    expect(boxes()).toEqual(['允许 beta.example', '允许 zeta.example']);
+    fireEvent.change(screen.getByRole('searchbox', { name: '搜索域名' }), { target: { value: 'none' } });
+    expect(screen.getByText('没有匹配的域名。')).toBeInTheDocument();
+  });
+});
+

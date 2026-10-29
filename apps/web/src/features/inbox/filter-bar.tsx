@@ -1,5 +1,5 @@
 import { Search, SlidersHorizontal } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
 import { FilterChip } from '@/components/ui/filter-chip';
@@ -7,6 +7,7 @@ import { inputClassName } from '@/components/ui/input';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { Sheet, SheetContent } from '@/components/ui/sheet';
 import { cn } from '@/lib/cn';
+import { sortedTexts } from '@/lib/sort';
 import { SEARCH_SHORTCUT_ATTR } from '@/lib/use-keyboard-shortcuts';
 import type { InboxFilters } from './use-inbox-filters';
 
@@ -41,12 +42,13 @@ function DomainChips({
   onChange: (domain: string | null) => void;
   className?: string;
 }) {
+  const sorted = useMemo(() => sortedTexts(domains), [domains]);
   return (
     <div role="group" aria-label="按域名筛选" className={cn('flex items-center gap-2', className)}>
       <FilterChip className="shrink-0" active={value === null} onClick={() => onChange(null)}>
         全部域名
       </FilterChip>
-      {domains.map((domain) => (
+      {sorted.map((domain) => (
         <FilterChip key={domain} className="shrink-0" active={value === domain} onClick={() => onChange(domain)}>
           {domain}
         </FilterChip>
