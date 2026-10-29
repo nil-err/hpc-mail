@@ -131,6 +131,7 @@ export function MailboxShareDialog({
             }}
             options={mailboxOptions}
             clearable={false}
+            modal
             placeholder="选择要共享的邮箱"
             searchPlaceholder="搜索邮箱地址…"
             emptyText="没有匹配的邮箱"

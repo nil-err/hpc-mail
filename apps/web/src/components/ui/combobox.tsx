@@ -20,6 +20,8 @@ export interface ComboboxProps {
   clearable?: boolean;
   disabled?: boolean;
   invalid?: boolean;
+  /** 放在 Dialog / Sheet 里时传 true：由弹层接管滚动锁，否则外层的锁会吞掉列表的滚轮 */
+  modal?: boolean;
   className?: string;
   id?: string;
   'aria-label'?: string;
@@ -38,6 +40,7 @@ export function Combobox({
   clearable = true,
   disabled,
   invalid,
+  modal = false,
   className,
   id,
   ...aria
@@ -87,9 +90,8 @@ export function Combobox({
   };
 
   return (
-    // modal：在 Dialog 内使用时由弹层接管滚动锁，否则 Dialog 的锁会吞掉列表的滚轮
     <PopoverPrimitive.Root
-      modal
+      modal={modal}
       open={open}
       onOpenChange={(next) => {
         setOpen(next);

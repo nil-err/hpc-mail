@@ -108,6 +108,7 @@ function DomainSelect({ value, options, label, disabled, onValueChange }: {
       onChange={(next) => { if (next) onValueChange(next); }}
       options={options}
       clearable={false}
+      modal
       disabled={disabled}
       placeholder="选择域名"
       searchPlaceholder="搜索域名…"
