@@ -1,15 +1,20 @@
 name: Sync upstream
 
-# A2「硬对齐」策略：把 fork 的 main 硬对齐到上游最新提交，只保留本 workflow 一个本地提交；
+# A2「硬对齐」策略：把 fork 的 main 硬对齐到上游最新提交，只保留本地补丁文件（见 PRESERVED）；
 # 上游有更新且**部署相关路径**真的变化时，才显式 dispatch Deploy HPC Mail。
 #
 # 设计要点：
 #  - scheduled workflow 只在默认分支运行，所以本文件必须在 main 上。
 #  - GITHUB_TOKEN 触发的 push 不会触发其它 workflow；而 workflow_dispatch 是官方例外
 #    （2022-09 起 "always create workflow runs"），因此这里显式 dispatch，不需要 PAT。
-#  - reset --hard 会删掉上游没有的文件，所以同步前备份本文件、同步后写回。
-#  - 幂等：main 若已经是「上游 + 仅本 workflow 提交」的形态，直接 no-op（不产生提交、不部署）。
-#  - 安全门：main 上出现除本文件之外的本地提交则失败退出，绝不静默覆盖。
+#  - reset --hard 会删掉上游没有的文件，所以同步前备份 PRESERVED 里的文件、同步后写回。
+#  - 幂等：main 若已经是「上游 + 仅本地补丁提交」的形态，直接 no-op（不产生提交、不部署）。
+#  - 安全门：main 上出现改动 PRESERVED 之外文件的本地提交则失败退出，绝不静默覆盖。
+#  - PRESERVED 说明：
+#      .github/workflows/sync-upstream.yml  本 workflow 自身
+#      .github/workflows/deploy.yml         部署校验/冒烟支持 Cloudflare Access service token
+#      scripts/smoke.sh                     冒烟脚本自动附加 service token 头
+#    这三个文件是 fork 相对上游的唯一差异；上游若也修了同样的点，可逐个从这里移除。
 on:
   schedule:
     - cron: '17 */6 * * *'
@@ -27,6 +32,8 @@ env:
   UPSTREAM_REPO: riba2534/hpc-mail
   BRANCH: main
   SELF_PATH: .github/workflows/sync-upstream.yml
+  # 同步后要写回的本地补丁文件（相对仓库根，空格分隔）
+  PRESERVED: ".github/workflows/sync-upstream.yml .github/workflows/deploy.yml scripts/smoke.sh"
   DEPLOY_WORKFLOW: deploy.yml
   # 与 deploy.yml 的 push paths 过滤器保持一致：这些路径变了才值得重新部署
   DEPLOY_PATHS: apps packages scripts package.json pnpm-lock.yaml pnpm-workspace.yaml
@@ -50,19 +57,25 @@ jobs:
           git fetch --no-tags upstream "${BRANCH}"
           echo "sha=$(git rev-parse "upstream/${BRANCH}")" >> "$GITHUB_OUTPUT"
 
-      - name: 安全门（main 上不允许除本 workflow 之外的本地提交）
+      - name: 安全门（main 上不允许改动本地补丁之外的提交）
         run: |
           set -euo pipefail
           bad=0
           for sha in $(git rev-list "upstream/${BRANCH}..HEAD"); do
-            files=$(git show --pretty=format: --name-only "$sha" | sed '/^$/d')
-            if [ "$files" != "$SELF_PATH" ]; then
-              echo "::error::main 存在非预期本地提交 ${sha:0:7}（改动: ${files//$'\n'/, }），拒绝强制同步"
+            unexpected=""
+            for f in $(git show --pretty=format: --name-only "$sha" | sed '/^$/d'); do
+              case " ${PRESERVED} " in
+                *" ${f} "*) ;;
+                *) unexpected="${unexpected} ${f}" ;;
+              esac
+            done
+            if [ -n "$unexpected" ]; then
+              echo "::error::main 存在非预期本地提交 ${sha:0:7}（越界改动:${unexpected}），拒绝强制同步"
               bad=1
             fi
           done
           [ "$bad" -eq 0 ] || exit 1
-          echo "安全门通过：main 上的额外提交只有 ${SELF_PATH}"
+          echo "安全门通过：main 上的额外提交只改动了本地补丁文件"
 
       - name: 判断是否需要同步 / 是否需要部署
         id: plan
@@ -73,8 +86,11 @@ jobs:
 
           # ① 形态判断：HEAD 的父提交是上游，且 HEAD 与上游的差异只有本 workflow 文件
           aligned=false
+          excludes=""
+          for f in $PRESERVED; do excludes="${excludes} :(exclude)${f}"; done
+          # shellcheck disable=SC2086
           if [ "$(git rev-parse 'HEAD^' 2>/dev/null || echo none)" = "$target" ] \
-             && git diff --quiet "$target" HEAD -- . ":(exclude)${SELF_PATH}"; then
+             && git diff --quiet "$target" HEAD -- . $excludes; then
             aligned=true
           fi
 
@@ -132,11 +148,19 @@ jobs:
             fi
           fi
           echo "  推送身份: ${identity}"
-          cp "$SELF_PATH" /tmp/sync-upstream.yml
+          # 备份本地补丁 → 硬对齐 → 写回 → 提交
+          rm -rf /tmp/sync-preserved && mkdir -p /tmp/sync-preserved
+          for f in $PRESERVED; do
+            [ -f "$f" ] || { echo "::error::缺少本地补丁文件 ${f}"; exit 1; }
+            mkdir -p "/tmp/sync-preserved/$(dirname "$f")"
+            cp "$f" "/tmp/sync-preserved/$f"
+          done
           git reset --hard "$target"
-          mkdir -p "$(dirname "$SELF_PATH")"
-          cp /tmp/sync-upstream.yml "$SELF_PATH"
-          git add "$SELF_PATH"
+          for f in $PRESERVED; do
+            mkdir -p "$(dirname "$f")"
+            cp "/tmp/sync-preserved/$f" "$f"
+            git add "$f"
+          done
           git -c user.name="github-actions[bot]" \
               -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
               commit -m "chore(ci): 对齐上游 ${target:0:7}（保留 sync-upstream workflow）"
