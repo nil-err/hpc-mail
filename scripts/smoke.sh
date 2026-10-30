@@ -3,6 +3,14 @@
 # 用法: BASE_URL=https://your-domain.example ADMIN_USERNAME=xx ADMIN_PASSWORD=xx ./scripts/smoke.sh
 set -euo pipefail
 
+# 站点若受 Cloudflare Access（Zero Trust）保护，所有请求都需要 service token；
+# 由 deploy.yml 通过 CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET 传入，本地调试可手动设置。
+ACCESS_HEADERS=()
+if [ -n "${CF_ACCESS_CLIENT_ID:-}" ] && [ -n "${CF_ACCESS_CLIENT_SECRET:-}" ]; then
+  ACCESS_HEADERS=(-H "CF-Access-Client-Id: ${CF_ACCESS_CLIENT_ID}" -H "CF-Access-Client-Secret: ${CF_ACCESS_CLIENT_SECRET}")
+fi
+curl() { command curl ${ACCESS_HEADERS[@]+"${ACCESS_HEADERS[@]}"} "$@"; }
+
 : "${BASE_URL:?需要 BASE_URL}"
 : "${ADMIN_USERNAME:?需要 ADMIN_USERNAME}"
 : "${ADMIN_PASSWORD:?需要 ADMIN_PASSWORD}"

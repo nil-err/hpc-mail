@@ -222,14 +222,33 @@ jobs:
         env:
           BUILD_SHA: ${{ github.sha }}
           BASE_URL: https://${{ vars.CUSTOM_DOMAIN }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
           set -euo pipefail
+          # 站点若受 Cloudflare Access（Zero Trust）保护，探测会被 302 到登录页。
+          # 配置了 service token 时带上凭据放行；没配置则立刻失败并给出明确指引，不再空等 240 秒。
+          AUTH=()
+          if [ -n "${CF_ACCESS_CLIENT_ID:-}" ] && [ -n "${CF_ACCESS_CLIENT_SECRET:-}" ]; then
+            AUTH=(-H "CF-Access-Client-Id: ${CF_ACCESS_CLIENT_ID}" -H "CF-Access-Client-Secret: ${CF_ACCESS_CLIENT_SECRET}")
+            echo "探测方式: 带 Cloudflare Access service token"
+          else
+            echo '::notice::未配置 CF_ACCESS_CLIENT_ID/CF_ACCESS_CLIENT_SECRET'
+          fi
           for i in $(seq 1 24); do
-            if curl -sS -D /tmp/hpc-config.headers "$BASE_URL/api/config" | jq -e '.data.registrationMode' >/dev/null 2>&1 && tr -d '\r' < /tmp/hpc-config.headers | grep -qi "^x-hpc-build: $BUILD_SHA$"; then
+            code=$(curl -sS ${AUTH[@]+"${AUTH[@]}"} -o /tmp/hpc-config.json -D /tmp/hpc-config.headers \
+                     -w '%{http_code}' "$BASE_URL/api/config" || echo 000)
+            if [ "$code" = "302" ] && tr -d '\r' < /tmp/hpc-config.headers | grep -qi '^location:.*cloudflareaccess\.com'; then
+              echo '::error::/api/config 被 Cloudflare Access 拦截（302 → cloudflareaccess.com），无法确认线上版本。'
+              echo '::error::处理：在 Zero Trust 创建 Access service token，把它的 Service Auth 策略加到该应用，然后配置仓库 secrets CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET。'
+              exit 1
+            fi
+            if [ "$code" = "200" ] && jq -e '.data.registrationMode' /tmp/hpc-config.json >/dev/null 2>&1 \
+               && tr -d '\r' < /tmp/hpc-config.headers | grep -qi "^x-hpc-build: $BUILD_SHA$"; then
               echo "新版本已生效（第 $i 次探测）"
               exit 0
             fi
-            echo "等待部署传播…（$i/24）"
+            echo "等待部署传播…（$i/24，HTTP $code）"
             sleep 10
           done
           echo '::error::240s 内新版本未生效'
@@ -240,4 +259,6 @@ jobs:
           BASE_URL: https://${{ vars.CUSTOM_DOMAIN }}
           ADMIN_USERNAME: ${{ vars.ADMIN_USERNAME }}
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: bash scripts/smoke.sh
